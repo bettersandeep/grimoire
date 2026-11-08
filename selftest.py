@@ -101,6 +101,13 @@ def main():
     assert guard.check("read_file", {"path": str(notes)}) is None        # not a data file
     assert guard.check("read_file", {"path": str(tmp / "nope.csv")}) is None
 
+    # discovery hint: only when a data file is mentioned
+    hint = guard.data_file_hint("What is revenue per region in /tmp/data/sales.csv? Highest first.")
+    assert hint and "/tmp/data/sales.csv" in hint and "grimoire_attach" in hint, hint
+    assert "orders.parquet" in guard.data_file_hint("compare orders.parquet with 'shop.db'")
+    for msg in ["hello", "explain the csv format", "see example.com/page", "", None, "v1.db2 release"]:
+        assert guard.data_file_hint(msg) is None, msg
+
     print("selftest passed")
 
 

@@ -11,3 +11,4 @@ provides_tools:
   - grimoire_catalog
 provides_hooks:
   - pre_tool_call
+  - pre_llm_call

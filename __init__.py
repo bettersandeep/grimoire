@@ -33,3 +33,9 @@ def register(ctx):
         return guard.check(tool_name, args, cwd=cwd, limit_kb=limit_kb)
 
     ctx.register_hook("pre_tool_call", before_tool)
+
+    def before_turn(user_message=None, **kwargs):
+        hint = guard.data_file_hint(user_message)
+        return {"context": hint} if hint else None
+
+    ctx.register_hook("pre_llm_call", before_turn)
