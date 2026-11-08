@@ -34,8 +34,19 @@ def register(ctx):
 
     ctx.register_hook("pre_tool_call", before_tool)
 
-    def before_turn(user_message=None, **kwargs):
+    def before_turn(user_message=None, session_id=None, **kwargs):
+        tools.remember_user_message(session_id, user_message)
         hint = guard.data_file_hint(user_message)
         return {"context": hint} if hint else None
 
     ctx.register_hook("pre_llm_call", before_turn)
+
+    # Append-only, so the reply keeps streaming; the footer prints after it (no hold_stream).
+    def after_reply(response_text=None, session_id=None, **kwargs):
+        try:
+            note = tools.check_reply(response_text, session_id)
+        except Exception:
+            return None  # never break a reply because the check failed
+        return response_text + note if note else None
+
+    ctx.register_hook("transform_llm_output", after_reply)

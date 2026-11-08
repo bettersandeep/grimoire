@@ -10,7 +10,47 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 pkg = importlib.import_module(HERE.name)
-engine, guard, schemas, store, tools = pkg.engine, pkg.guard, pkg.schemas, pkg.store, pkg.tools
+engine, guard, schemas, store, tools, verify = (
+    pkg.engine, pkg.guard, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
+
+
+# A real reply from a Hermes session (2026-11-08) with the results it was based on.
+REAL_REPLY = """Total revenue per region, highest first (amount_paise ÷ 100 = rupees):
+
+Raw region values as stored [q6]
+  North       66,134,849.68   (6,613,484,968 paise)
+  South       54,379,325.19   (5,437,932,519 paise)
+  north        6,053,658.30     (605,365,830 paise)
+After trimming/case-folding [q7]
+  NORTH       72,188,507.98   (7,218,850,798 paise)
+- "N. Region" is separate; if it also means North, North becomes 76,840,174.17.
+- 50,000 rows total in the file; 5 rows are in the two malformed labels.
+"""
+REAL_RESULTS = [
+    [["North", 6613484968, 66134849.68], ["South", 5437932519, 54379325.19], ["north ", 605365830, 6053658.3],
+     ["N. Region", 465166619, 4651666.19]],
+    [["NORTH", 7218850798, 72188507.98], ["SOUTH", 5437932519, 54379325.19], ["N. REGION", 465166619, 4651666.19]],
+    [50000],  # attach row count
+]
+
+
+def test_verify():
+    # precision, suffixes, percent, ignored spans
+    vals = [76840174.17, 14.2, 0.383, 2436]
+    assert verify.check("North made 76.8M", vals) == (["76.8M"], [])
+    assert verify.check("North made ₹76,840,174.17", vals) == (["76,840,174.17"], [])
+    assert verify.check("growth was 14.2%", vals) == (["14.2%"], [])
+    assert verify.check("38.3% are empty", vals) == (["38.3%"], [])  # matches 0.383
+    assert verify.check("2,436 rows", vals) == (["2,436"], [])
+    assert verify.check("2,437 rows", vals) == ([], ["2,437"])
+    skipped = "In 2026 on 2026-01-03 at 10:30, see [q7] and q12, `SELECT 42`, divide by 100, 4xx codes.\n1. first"
+    assert verify.check(skipped, vals) == ([], []), verify.extract(skipped)
+    assert verify.check("top 3 regions", vals, ignore=["3"]) == ([], [])
+    assert verify.footer([], []) == ""
+    # the real reply: the derived total and the invented count have no source
+    sourced, unsourced = verify.check(REAL_REPLY, verify.numeric_values(REAL_RESULTS))
+    assert unsourced == ["76,840,174.17", "5"], unsourced
+    assert len(sourced) == 9, sourced
 
 
 def call(handler, **args):
@@ -107,6 +147,15 @@ def main():
     assert "orders.parquet" in guard.data_file_hint("compare orders.parquet with 'shop.db'")
     for msg in ["hello", "explain the csv format", "see example.com/page", "", None, "v1.db2 release"]:
         assert guard.data_file_hint(msg) is None, msg
+
+    # reply check through the tools: only numbers this session's tools returned count
+    test_verify()
+    tools.remember_user_message("test", "show the top 2 regions")
+    note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
+    assert "2 of 3" in note and "999" in note and "No source" in note, note
+    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith("the number matches query results.")
+    assert tools.check_reply("no numbers here", "test") == ""
+    assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
 
     print("selftest passed")
 
