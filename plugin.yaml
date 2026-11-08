@@ -3,3 +3,9 @@ version: "0.1.0"
 description: "Learn and explore your data with fewer tokens: ask questions about CSV, Parquet and SQLite files, and every number in the answer comes from a real query."
 author: Sandeep Singh
 requires_hermes: ">=0.23.0"
+provides_tools:
+  - grimoire_attach
+  - grimoire_profile
+  - grimoire_query
+  - grimoire_note
+  - grimoire_catalog
