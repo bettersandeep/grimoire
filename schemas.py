@@ -3,7 +3,7 @@
 ATTACH = {
     "name": "grimoire_attach",
     "description": (
-        "Attach a local data file (CSV, TSV, Parquet or SQLite) so you can query it with SQL. "
+        "Open a CSV, TSV, Parquet or SQLite file for SQL questions; never read it raw. "
         "Returns the dataset name, its tables, columns and row counts. "
         "Use this before answering any question about the contents of a data file. "
         "Never read data files into the conversation; attach and query them instead."
@@ -21,7 +21,7 @@ ATTACH = {
 PROFILE = {
     "name": "grimoire_profile",
     "description": (
-        "Profile a table: per column type, null percentage, approximate distinct count, min and max. "
+        "Profile a data table: column types, empty values, distinct counts, ranges. "
         "Use it to understand a dataset before writing queries and to spot data quality problems."
     ),
     "parameters": {
@@ -37,8 +37,8 @@ PROFILE = {
 QUERY = {
     "name": "grimoire_query",
     "description": (
-        "Run one read-only DuckDB SQL query on attached datasets. "
-        "Returns a query id (like q7), the columns and up to 200 rows. "
+        "Answer questions about attached data files with one read-only SQL query. "
+        "Uses DuckDB. Returns a query id (like q7), the columns and up to 200 rows. "
         "Compute every number you will state (totals, averages, growth, shares, differences) in SQL, "
         "so each number in your answer appears in a query result. "
         "Cite the query id next to the numbers it supports, for example 'Revenue grew 14.2% [q7]'. "
@@ -57,7 +57,7 @@ QUERY = {
 NOTE = {
     "name": "grimoire_note",
     "description": (
-        "Save what a column means (unit, encoding, caveat) so later sessions know it without asking again. "
+        "Save what a data column means (unit, code, caveat) for later sessions. "
         "Example: column 'amount', note 'in cents, integer'."
     ),
     "parameters": {
@@ -74,8 +74,8 @@ NOTE = {
 CATALOG = {
     "name": "grimoire_catalog",
     "description": (
-        "List the datasets Grimoire knows (also from earlier sessions), their tables, saved column notes "
-        "and recent queries. Call this first when the user refers to data they used before."
+        "List data files, column notes and queries saved from earlier sessions. "
+        "Call this first when the user refers to data they used before."
     ),
     "parameters": {"type": "object", "properties": {}},
 }

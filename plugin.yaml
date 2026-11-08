@@ -9,3 +9,5 @@ provides_tools:
   - grimoire_query
   - grimoire_note
   - grimoire_catalog
+provides_hooks:
+  - pre_tool_call
