@@ -10,7 +10,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 pkg = importlib.import_module(HERE.name)
-engine, store, tools = pkg.engine, pkg.store, pkg.tools
+engine, guard, schemas, store, tools = pkg.engine, pkg.guard, pkg.schemas, pkg.store, pkg.tools
 
 
 def call(handler, **args):
@@ -82,6 +82,24 @@ def main():
     # errors are JSON, never exceptions
     assert "error" in call(tools.attach, path=str(tmp / "missing.csv"))
     assert "error" in call(tools.profile, dataset="nope")
+
+    # tool descriptions: the Tool Search listing shows only the first sentence, up to 80 characters
+    for schema in schemas.ALL:
+        first = schema["description"].split(". ")[0] + "."
+        assert len(first) <= 80, (schema["name"], len(first), first)
+
+    # read guard: blocks big data files only
+    big = tmp / "big.csv"
+    big.write_text("a,b\n" + "1,2\n" * 100000)
+    assert guard.check("read_file", {"path": str(big)})["action"] == "block"
+    assert guard.check("read_file", {"path": "big.csv"}, cwd=str(tmp))["action"] == "block"
+    assert guard.check("read_file", {"path": str(csv)}) is None          # small file
+    assert guard.check("read_file", {"path": str(big)}, limit_kb=0) is None  # turned off
+    assert guard.check("terminal", {"command": f"head {big}"}) is None   # other tools
+    notes = tmp / "notes.md"
+    notes.write_text("x" * 400000)
+    assert guard.check("read_file", {"path": str(notes)}) is None        # not a data file
+    assert guard.check("read_file", {"path": str(tmp / "nope.csv")}) is None
 
     print("selftest passed")
 
