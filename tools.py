@@ -2,13 +2,66 @@
 
 import json
 import os
+import re
 import threading
+from collections import OrderedDict
 
 from . import engine
 from . import store
+from . import verify
 
 _lock = threading.Lock()
 _state = {"db": None, "engine": None}
+
+# Numbers each session's Grimoire tools returned, and numbers the user typed, for the reply check.
+# ponytail: in memory, last 50 sessions and 50k values each; lost on restart (cited query ids still work).
+_MAX_SESSIONS, _MAX_VALUES = 50, 50000
+_values = OrderedDict()
+_user_numbers = OrderedDict()
+_last = {"session": None}
+
+
+def _bucket(table, session_id):
+    key = session_id or ""
+    bucket = table.setdefault(key, [])
+    table.move_to_end(key)
+    while len(table) > _MAX_SESSIONS:
+        table.popitem(last=False)
+    return bucket
+
+
+def remember(session_id, result):
+    numbers = verify.numeric_values(result)
+    with _lock:
+        bucket = _bucket(_values, session_id)
+        bucket.extend(numbers)
+        del bucket[:-_MAX_VALUES]
+        _last["session"] = session_id or ""
+
+
+def remember_user_message(session_id, text):
+    raws = [c["raw"].split()[0].rstrip("%") for c in verify.extract(text)]
+    with _lock:
+        _bucket(_user_numbers, session_id).extend(raws)
+
+
+def check_reply(text, session_id=None):
+    """Footer for a final reply, or "" when Grimoire was not used or the reply has no numbers."""
+    with _lock:
+        key = session_id if session_id in _values else (_last["session"] if not session_id else None)
+        values = list(_values.get(key, [])) if key is not None else []
+        ignore = list(_user_numbers.get(session_id or "", []))
+    cited = re.findall(r"\bq(\d+)\b", text or "", re.I)
+    if cited:
+        db, _eng = _get()
+        for qid in dict.fromkeys(cited):
+            q = store.get_query(db, qid)
+            if q:
+                values.extend(verify.numeric_values(q["rows"]))
+    if not values:
+        return ""
+    sourced, unsourced = verify.check(text, values, ignore=ignore)
+    return verify.footer(sourced, unsourced)
 
 
 def open_db():
@@ -64,7 +117,7 @@ def _sql_ref(ref):
     return ".".join(engine.ident(part) for part in ref.split(".", 1))
 
 
-def attach(args, **kwargs):
+def attach(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
         name, kind = eng.attach(args.get("path", ""), args.get("name"))
@@ -76,6 +129,7 @@ def attach(args, **kwargs):
             cols = eng.schema(sql_ref)
             store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
             tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
+        remember(session_id, [t["rows"] for t in tables])
         return _ok(dataset=name, kind=kind, tables=tables,
                    hint=f"Query with FROM {_sql_ref(eng.tables(name)[0])}. Profile with grimoire_profile.")
     except engine.EngineError as exc:
@@ -84,7 +138,7 @@ def attach(args, **kwargs):
         return _err(f"attach failed: {exc}")
 
 
-def profile(args, **kwargs):
+def profile(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
         dataset = args.get("dataset", "")
@@ -101,6 +155,7 @@ def profile(args, **kwargs):
             saved.append((r["column_name"], r["column_type"], prof))
             compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
         store.save_columns(db, dataset, ref, saved)
+        remember(session_id, [row[2:] for row in compact])
         return _ok(table=ref, columns=["column", "type", "null_pct", "distinct", "min", "max"], profile=compact)
     except engine.EngineError as exc:
         return _err(str(exc))
@@ -114,6 +169,7 @@ def query(args, session_id=None, **kwargs):
         sql = args.get("sql", "")
         columns, rows, truncated = eng.query(sql)
         qid = store.save_query(db, session_id, sql, args.get("purpose"), columns, rows, truncated)
+        remember(session_id, rows)
         result = {"id": qid, "columns": columns, "rows": rows}
         if truncated:
             result["truncated"] = f"Only the first {engine.MAX_ROWS} rows are shown. Aggregate in SQL instead."
