@@ -86,7 +86,7 @@ def _get():
             for name, path, _kind in store.datasets(_state["db"]):
                 if os.path.isfile(path):
                     try:
-                        eng.attach(path, name)
+                        eng.attach(path, name, merges=store.merges(_state["db"], name))
                     except engine.EngineError:
                         pass  # the file changed or broke; the catalog still lists it as missing
             _state["engine"] = eng
@@ -120,7 +120,9 @@ def _sql_ref(ref):
 def attach(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
-        name, kind = eng.attach(args.get("path", ""), args.get("name"))
+        path_arg = args.get("path", "")
+        wanted = engine.dataset_name(path_arg, args.get("name"))
+        name, kind = eng.attach(path_arg, args.get("name"), merges=store.merges(db, wanted))
         path = eng.datasets[name][0]
         store.save_dataset(db, name, path, kind)
         tables = []
@@ -130,8 +132,22 @@ def attach(args, session_id=None, **kwargs):
             store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
             tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
         remember(session_id, [t["rows"] for t in tables])
-        return _ok(dataset=name, kind=kind, tables=tables,
-                   hint=f"Query with FROM {_sql_ref(eng.tables(name)[0])}. Profile with grimoire_profile.")
+        result = {"dataset": name, "kind": kind, "tables": tables}
+        skipped, first = eng.rejects(name)
+        if skipped:
+            result["skipped_lines"] = {
+                "count": skipped,
+                "first": [f"line {line}: {err}: {text}" for line, err, text in first[:5]],
+                "note": "These lines are malformed and are not in any query result. Tell the user.",
+            }
+        rules = _merge_lines(eng.merges(name))
+        if rules:
+            result["merges"] = rules
+            result["merges_note"] = (f"Queries use the merged values. The data without merges is "
+                                     f"FROM {engine.ident(name + '_raw')} (CSV, JSON, Parquet).")
+        result["hint"] = f"Query with FROM {_sql_ref(eng.tables(name)[0])}. Profile with grimoire_profile."
+        remember(session_id, [skipped])
+        return _ok(**result)
     except engine.EngineError as exc:
         return _err(str(exc))
     except Exception as exc:  # never let a tool crash the turn
@@ -155,8 +171,17 @@ def profile(args, session_id=None, **kwargs):
             saved.append((r["column_name"], r["column_type"], prof))
             compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
         store.save_columns(db, dataset, ref, saved)
+        issues = eng.issues(_sql_ref(ref), rows)
         remember(session_id, [row[2:] for row in compact])
-        return _ok(table=ref, columns=["column", "type", "null_pct", "distinct", "min", "max"], profile=compact)
+        remember(session_id, issues)
+        result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
+        if issues:
+            result["issues"] = issues
+            result["issues_note"] = (
+                "Tell the user about these problems and ask what they mean before you rely on them "
+                "(for example: do empty amounts mean 0?). If the user says variants are the same value, "
+                "save it with grimoire_merge so every later query uses it.")
+        return _ok(**result)
     except engine.EngineError as exc:
         return _err(str(exc))
     except Exception as exc:
@@ -181,6 +206,39 @@ def query(args, session_id=None, **kwargs):
         return _err(f"query failed: {exc}")
 
 
+def merge(args, **kwargs):
+    try:
+        db, eng = _get()
+        dataset = args.get("dataset", "")
+        ref = _resolve_table(eng, dataset, args.get("table"))
+        column, into = args.get("column", ""), args.get("into")
+        values = [v for v in (args.get("values") or []) if isinstance(v, str)]
+        if not values or not isinstance(into, str):
+            return _err("Pass values (a list of text values) and into (the value to use instead).")
+        types = dict(eng.schema(_sql_ref(ref)))
+        if column not in types:
+            return _err(f"No column '{column}' in {ref}. Columns: {', '.join(types)}")
+        if types[column] != "VARCHAR":
+            return _err(f"Column '{column}' is {types[column]}. Merges work on text columns only.")
+        store.save_merge(db, dataset, ref, column, values, into)
+        eng.set_merges(dataset, store.merges(db, dataset))
+        return _ok(saved=True, rule=f"{column}: {', '.join(repr(v) for v in values)} -> {into!r}",
+                   applies_to=f"Every later query on {dataset}, also in new sessions. The file does not change.",
+                   undo=f"/grimoire unmerge {dataset} {column}")
+    except engine.EngineError as exc:
+        return _err(str(exc))
+    except Exception as exc:
+        return _err(f"merge failed: {exc}")
+
+
+def _merge_lines(merges):
+    lines = []
+    for (tbl, col), mapping in merges.items():
+        name = col if "." not in tbl else f"{tbl.split('.', 1)[1]}.{col}"
+        lines += [f"{name}: {a!r} -> {b!r}" for a, b in mapping.items()]
+    return lines
+
+
 def note(args, **kwargs):
     try:
         db, _eng = _get()
@@ -202,6 +260,9 @@ def catalog(args, **kwargs):
                 entry["tables"] = eng.tables(name)
             else:
                 entry["status"] = "file missing or unreadable"
+            rules = _merge_lines(store.merges(db, name))
+            if rules:
+                entry["merges"] = rules
             entry["notes"] = [f"{tbl}.{col}: {text}" if "." not in tbl else f"{tbl.split('.', 1)[1]}.{col}: {text}"
                               for tbl, col, text in store.notes(db, name)]
             items.append(entry)

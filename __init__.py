@@ -1,12 +1,13 @@
 """Grimoire: learn and explore data with fewer tokens."""
 
-from . import guard, schemas, tools
+from . import commands, guard, schemas, tools
 
 _HANDLERS = {
     "grimoire_attach": tools.attach,
     "grimoire_profile": tools.profile,
     "grimoire_query": tools.query,
     "grimoire_note": tools.note,
+    "grimoire_merge": tools.merge,
     "grimoire_catalog": tools.catalog,
 }
 
@@ -20,6 +21,9 @@ def register(ctx):
             schema=schema,
             handler=_HANDLERS[schema["name"]],
         )
+
+    ctx.register_command("grimoire", commands.run, description="Grimoire status, query SQL, skipped lines and merges",
+                         args_hint="[sql q12 | rejects | merges | unmerge <dataset> <column>]")
 
     # Users can change the size limit, or set 0 to turn the guard off:
     # plugins.entries.grimoire.settings.read_guard_kb in config.yaml

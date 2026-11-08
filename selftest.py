@@ -10,8 +10,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 pkg = importlib.import_module(HERE.name)
-engine, guard, schemas, store, tools, verify = (
-    pkg.engine, pkg.guard, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
+commands, engine, guard, schemas, store, tools, verify = (
+    pkg.commands, pkg.engine, pkg.guard, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
 
 
 # A real reply from a Hermes session (2026-11-08) with the results it was based on.
@@ -51,6 +51,55 @@ def test_verify():
     sourced, unsourced = verify.check(REAL_REPLY, verify.numeric_values(REAL_RESULTS))
     assert unsourced == ["76,840,174.17", "5"], unsourced
     assert len(sourced) == 9, sourced
+
+
+def test_data_quality(tmp, db):
+    import gzip
+    # malformed lines: good rows load with real columns, bad lines are reported
+    bad = tmp / "messy.csv"
+    rows = ["id,region,amount"] + [f"{i},{'North' if i % 3 else 'north '},{i}" for i in range(1, 40)]
+    rows += ["40,South,40,extra", "41,N/A,7", "42,North,x1"]
+    bad.write_text("\n".join(rows) + "\n")
+    r = call(tools.attach, path=str(bad))
+    assert r["tables"][0]["rows"] == 41, r
+    assert r["skipped_lines"]["count"] == 1 and "TOO MANY COLUMNS" in r["skipped_lines"]["first"][0], r
+    assert set(r["tables"][0]["columns"]) >= {"id BIGINT", "region VARCHAR"}, r
+    assert "messy: 1 malformed" in commands.run("rejects")
+
+    # profile lists problems: spelling variants, numbers stored as text
+    r = call(tools.profile, dataset="messy")
+    kinds = {(i["column"], i["issue"]) for i in r["issues"]}
+    assert ("region", "spelling variants of one value") in kinds, r["issues"]
+    assert ("amount", "text column that is almost all numbers") in kinds, r["issues"]
+
+    # merge: enforced in every query, kept across sessions, raw view kept, undo works
+    r = call(tools.merge, dataset="messy", column="region", values=["north "], into="North")
+    assert r.get("saved"), r
+    q = "SELECT count(*) FROM messy WHERE region = 'North'"
+    assert call(tools.query, sql=q)["rows"] == [[40]]
+    tools.setup(db=db, eng=None)  # a new session
+    assert call(tools.query, sql=q)["rows"] == [[40]]
+    assert call(tools.query, sql="SELECT count(*) FROM messy_raw WHERE region = 'North'")["rows"] == [[27]]
+    assert "north " in commands.run("merges") and "merges" in next(
+        d for d in call(tools.catalog)["datasets"] if d["dataset"] == "messy")
+    assert "error" in call(tools.merge, dataset="messy", column="id", values=["1"], into="2")  # not text
+    assert "Removed 1" in commands.run("unmerge messy region")
+    assert call(tools.query, sql=q)["rows"] == [[27]]
+
+    # JSON, NDJSON and compressed CSV
+    (tmp / "events.ndjson").write_text('{"kind": "a", "n": 1}\n{"kind": "b", "n": 2}\n')
+    assert call(tools.attach, path=str(tmp / "events.ndjson"))["tables"][0]["rows"] == 2
+    with gzip.open(tmp / "zipped.csv.gz", "wt") as f:
+        f.write("a,b\n1,2\n3,4\n")
+    r = call(tools.attach, path=str(tmp / "zipped.csv.gz"))
+    assert r["dataset"] == "zipped" and r["tables"][0]["rows"] == 2, r
+    assert "error" in call(tools.attach, path=str(tmp / "x.parquet.gz"))
+
+    # slash command: status, sql, unknown
+    status = commands.run("")
+    assert status.startswith("Grimoire ") and "messy" in status and "Learning mode" in status, status
+    assert "SELECT region" in commands.run("sql q1")
+    assert "Unknown command" in commands.run("dance")
 
 
 def call(handler, **args):
@@ -157,6 +206,7 @@ def main():
     assert tools.check_reply("no numbers here", "test") == ""
     assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
 
+    test_data_quality(tmp, db)
     print("selftest passed")
 
 
