@@ -19,6 +19,15 @@ CREATE TABLE IF NOT EXISTS columns (
     note      TEXT,
     PRIMARY KEY (dataset, tbl, col)
 );
+CREATE TABLE IF NOT EXISTS merges (
+    dataset    TEXT NOT NULL,
+    tbl        TEXT NOT NULL,
+    col        TEXT NOT NULL,
+    from_value TEXT NOT NULL,
+    to_value   TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (dataset, tbl, col, from_value)
+);
 CREATE TABLE IF NOT EXISTS queries (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT,
@@ -49,6 +58,7 @@ def save_dataset(db, name, path, kind):
 def forget_dataset(db, name):
     db.execute("DELETE FROM datasets WHERE name = ?", (name,))
     db.execute("DELETE FROM columns WHERE dataset = ?", (name,))
+    db.execute("DELETE FROM merges WHERE dataset = ?", (name,))
     db.commit()
 
 
@@ -85,6 +95,40 @@ def notes(db, dataset):
     return db.execute(
         "SELECT tbl, col, note FROM columns WHERE dataset = ? AND note IS NOT NULL ORDER BY tbl, col", (dataset,)
     ).fetchall()
+
+
+def save_merge(db, dataset, table, column, values, into):
+    """Map each of values to into in dataset.table.column. A value merged before is re-pointed."""
+    now = time.time()
+    db.executemany(
+        "INSERT INTO merges (dataset, tbl, col, from_value, to_value, created_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(dataset, tbl, col, from_value) DO UPDATE SET to_value = excluded.to_value, "
+        "created_at = excluded.created_at",
+        [(dataset, table, column, v, into, now) for v in values if v != into],
+    )
+    db.commit()
+
+
+def delete_merges(db, dataset, column):
+    """column may be 'col' or 'table.col'. Returns the number of rules removed."""
+    table, _, col = column.rpartition(".")
+    sql, args = "DELETE FROM merges WHERE dataset = ? AND col = ?", [dataset, col]
+    if table:
+        sql += " AND (tbl = ? OR tbl = ?)"
+        args += [table, f"{dataset}.{table}"]
+    cur = db.execute(sql, args)
+    db.commit()
+    return cur.rowcount
+
+
+def merges(db, dataset):
+    """{(table, column): {from_value: to_value}} for one dataset."""
+    out = {}
+    for tbl, col, a, b in db.execute(
+        "SELECT tbl, col, from_value, to_value FROM merges WHERE dataset = ? ORDER BY created_at", (dataset,)
+    ):
+        out.setdefault((tbl, col), {})[a] = b
+    return out
 
 
 def save_query(db, session_id, sql, purpose, columns, rows, truncated):

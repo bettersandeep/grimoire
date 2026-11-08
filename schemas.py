@@ -4,7 +4,9 @@ ATTACH = {
     "name": "grimoire_attach",
     "description": (
         "Open a CSV, TSV, Parquet or SQLite file for SQL questions; never read it raw. "
-        "Returns the dataset name, its tables, columns and row counts. "
+        "Also JSON and NDJSON, and .gz or .zst compressed CSV and JSON. "
+        "Returns the dataset name, its tables, columns, row counts, malformed lines it skipped "
+        "and saved merges. "
         "Use this before answering any question about the contents of a data file. "
         "Never read data files into the conversation; attach and query them instead."
     ),
@@ -22,7 +24,8 @@ PROFILE = {
     "name": "grimoire_profile",
     "description": (
         "Profile a data table: column types, empty values, distinct counts, ranges. "
-        "Use it to understand a dataset before writing queries and to spot data quality problems."
+        "Also lists data problems: empty values, numbers or dates stored as text, and spelling variants "
+        "of one value. Use it before writing queries, and ask the user about the problems it finds."
     ),
     "parameters": {
         "type": "object",
@@ -71,6 +74,26 @@ NOTE = {
     },
 }
 
+MERGE = {
+    "name": "grimoire_merge",
+    "description": (
+        "Merge spelling variants of a value (like 'north ' into 'North') in every query. "
+        "Call it only after the user agrees that the values mean the same thing. "
+        "The rule is saved, applies to all later queries and sessions, and does not change the file."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "dataset": {"type": "string", "description": "Dataset name from grimoire_attach."},
+            "column": {"type": "string", "description": "A text column."},
+            "values": {"type": "array", "items": {"type": "string"}, "description": "The exact values to replace."},
+            "into": {"type": "string", "description": "The value to use instead."},
+            "table": {"type": "string", "description": "Table reference. Optional for CSV, JSON and Parquet."},
+        },
+        "required": ["dataset", "column", "values", "into"],
+    },
+}
+
 CATALOG = {
     "name": "grimoire_catalog",
     "description": (
@@ -80,4 +103,4 @@ CATALOG = {
     "parameters": {"type": "object", "properties": {}},
 }
 
-ALL = [ATTACH, PROFILE, QUERY, NOTE, CATALOG]
+ALL = [ATTACH, PROFILE, QUERY, NOTE, MERGE, CATALOG]

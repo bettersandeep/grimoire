@@ -1,6 +1,6 @@
 name: grimoire
-version: "0.3.0"
-description: "Learn and explore your data with fewer tokens: ask questions about CSV, Parquet and SQLite files, and every number in the answer comes from a real query."
+version: "0.4.0"
+description: "Learn and explore your data with fewer tokens: ask questions about CSV, JSON, Parquet and SQLite files, and every number in the answer comes from a real query."
 author: Sandeep Singh
 requires_hermes: ">=0.23.0"
 provides_tools:
@@ -8,6 +8,7 @@ provides_tools:
   - grimoire_profile
   - grimoire_query
   - grimoire_note
+  - grimoire_merge
   - grimoire_catalog
 provides_hooks:
   - pre_tool_call
