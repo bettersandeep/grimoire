@@ -492,6 +492,20 @@ class FakeCtx:
     def session_cwd(self): return None
 
 
+def test_glob_and_names(tmp, db):
+    tools.setup(db=db, eng=None)
+    assert guard.data_file_mentions("rows in ~/d/yellow_2024-*.parquet?") == ["~/d/yellow_2024-*.parquet"]
+    assert guard.data_file_mentions("see sales_[ab].csv and x?.tsv") == ["sales_[ab].csv", "x?.tsv"]
+    for m in (1, 2):
+        (tmp / f"trips_{m}.csv").write_text(f"id,v\n{m},1\n{m + 10},2\n")
+    hint = tools.auto_attach(f"How many rows in {tmp}/trips_*.csv?", "glob")
+    assert "(4 rows)" in hint and "2 files in one table" in hint, hint
+    # numbers inside names and zero-padded codes are not claims; an invented count still is
+    text = "6 files: yellow_2024-05.parquet has 3,723,833 rows (2024-01 through 06); 5 rows are odd."
+    assert [c["raw"] for c in verify.extract(text)] == ["6", "3,723,833", "5"], verify.extract(text)
+    assert verify.check(text, [3723833, 6])[2] == ["5"]
+
+
 def test_recipes(tmp, db):
     tools.setup(db=db, eng=None)
     recipes = pkg.recipes
@@ -701,6 +715,7 @@ def main():
     test_profile_checks(tmp, db)
     test_lean_setup(tmp, db)
     test_recipes(tmp, db)
+    test_glob_and_names(tmp, db)
     test_charts()
     test_compare(tmp, db)
     print("selftest passed")

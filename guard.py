@@ -7,7 +7,7 @@ from pathlib import Path
 DATA_SUFFIXES = {".csv", ".tsv", ".parquet", ".pq", ".sqlite", ".sqlite3", ".db"}
 DEFAULT_LIMIT_KB = 256
 _DATA_FILE = re.compile(
-    r"[^\s'\"`<>()]*?[\w-]\.(?:csv|tsv|parquet|pq|sqlite3?|db|jsonl|ndjson)(?:\.gz|\.zst)?\b", re.IGNORECASE)
+    r"[^\s'\"`<>()]*?[\w*?\]-]\.(?:csv|tsv|parquet|pq|sqlite3?|db|jsonl|ndjson)(?:\.gz|\.zst)?\b", re.IGNORECASE)
 
 
 def data_file_mentions(user_message):
