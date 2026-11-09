@@ -440,7 +440,7 @@ class Engine:
 
 PLACEHOLDERS = ("n/a", "na", "#n/a", "null", "none", "nil", "-", "--", "?", "unknown", "tbd", "missing")
 SENTINELS = (-9999999, -999999, -99999, -9999, -999, 999, 9999, 99999, 999999, 9999999)
-_AMOUNT = re.compile(r"amount|price|cost|revenue|sales|total|qty|quantity|units|paise|fare|fee", re.I)
+_AMOUNT = re.compile(r"amount|price|cost|revenue|sales|total|qty|quantity|units|cents|paise|fare|fee", re.I)
 _NUMBER_TYPES = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC")
 
 

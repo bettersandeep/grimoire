@@ -20,7 +20,7 @@ HELP = """Commands:
   /grimoire report [dataset]         an HTML report of the last session's queries (or one file's)
   /grimoire learn on | off           learning mode: a short lesson after data answers
   /grimoire learn predict on | off   guess the answer before you see it (needs learning mode)
-  /grimoire define <name> = <expr>   save a metric, e.g. revenue = sum(amount_paise) / 100
+  /grimoire define <name> = <expr>   save a metric, e.g. revenue = sum(amount_cents) / 100
   /grimoire metrics                  saved metrics; /grimoire undefine <name> removes one
   /grimoire rejects [dataset]        malformed lines skipped when a file was read
   /grimoire merges [dataset]         merge rules, applied and waiting for approval
@@ -76,7 +76,7 @@ def run(raw_args="", **kwargs):
         if cmd == "metrics":
             saved = store.metrics(db)
             return "\n".join(f"{n}() = {e}" for n, e in saved.items()) or (
-                "No saved metrics. Example: /grimoire define revenue = sum(amount_paise) / 100")
+                "No saved metrics. Example: /grimoire define revenue = sum(amount_cents) / 100")
         if cmd == "undefine" and len(rest) == 1:
             return f"Removed {rest[0]}()." if store.drop_metric(db, rest[0].lower().rstrip("()")) else f"No metric {rest[0]}."
         if cmd == "learn":
@@ -159,7 +159,7 @@ def _define(db, eng, text):
     name, sep, expression = text.partition("=")
     name, expression = name.strip().lower().rstrip("()").strip(), expression.strip()
     if not sep or not name or not expression:
-        return "Use: /grimoire define <name> = <SQL expression>, for example revenue = sum(amount_paise) / 100"
+        return "Use: /grimoire define <name> = <SQL expression>, for example revenue = sum(amount_cents) / 100"
     try:
         works = metrics.validate(eng, name, expression)
     except engine.EngineError as exc:

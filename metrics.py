@@ -17,7 +17,7 @@ def validate(eng, name, expression):
     if not _NAME.match(name):
         raise engine.EngineError("Use a short lower-case name: letters, digits and _ (for example revenue).")
     if ";" in expression or not expression.strip():
-        raise engine.EngineError("Give one SQL expression, for example: sum(amount_paise) / 100")
+        raise engine.EngineError("Give one SQL expression, for example: sum(amount_cents) / 100")
     if eng.function_exists(name):
         raise engine.EngineError(f"{name} is already a DuckDB function. Pick another name.")
     works = []

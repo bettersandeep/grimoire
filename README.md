@@ -8,11 +8,17 @@ Grimoire opens it in DuckDB, answers with SQL, saves each query with an id like 
 
 ```
 You:     What is the total revenue per region in ~/grimoire-bench/sales_50k.csv?
-Hermes:  North ₹3.21 crore · South ₹2.45 crore · West ₹1.99 crore ·
-         East ₹1.94 crore · N. Region ₹0.09 crore [q7]
+         amount_cents is in US cents. Answer in one short line, in millions of dollars.
+Hermes:  North 2,905.17M; South 2,453.49M; West 1,993.43M; East 1,942.55M;
+         north  304.38M; N. Region 93.79M [q42].
          ---
-         Grimoire check: all 5 numbers trace to query results.
+         Grimoire check: 0 of 6 numbers trace to query results. No source query for:
+         2,905.17M · 2,453.49M · 1,993.43M · 1,942.55M · 304.38M · 93.79M.
+         Verdict: needs revision.
 ```
+
+A real answer (free model, 2026-11-09): the model forgot to divide cents by 100.
+Query q42 says North made $29.05M, not $2,905M, and Grimoire flagged every number.
 
 ## Install
 
@@ -89,7 +95,7 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 | `/grimoire chart q12` | A bar chart of a result |
 | `/grimoire rerun q12` | Run the SQL again and check the result still holds |
 | `/grimoire report [dataset]` | Save an HTML report of the last session's queries, or of one file's |
-| `/grimoire define revenue = sum(amount_paise) / 100` | Save a metric; answers then compute "revenue" the same way every time |
+| `/grimoire define revenue = sum(amount_cents) / 100` | Save a metric; answers then compute "revenue" the same way every time |
 | `/grimoire metrics` / `undefine <name>` | List or remove saved metrics |
 | `/grimoire learn on` / `off` | Learning mode |
 | `/grimoire learn predict on` / `off` | Guess the answer before you see it |

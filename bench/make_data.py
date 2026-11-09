@@ -17,7 +17,7 @@ def make(path, rows, seed=7):
     rng = random.Random(seed)
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["order_id", "order_date", "region", "category", "amount_paise", "units", "customer_id"])
+        w.writerow(["order_id", "order_date", "region", "category", "amount_cents", "units", "customer_id"])
         for i in range(rows):
             day = "" if rng.random() < 0.02 else f"2026-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
             amount = "" if rng.random() < 0.04 else rng.randint(5_000, 400_000)

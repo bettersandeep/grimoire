@@ -21,7 +21,7 @@ Also when they refer to data they used before.
 2. If Grimoire already attached the file (the context says "Data files are attached"), go straight to step 4. Otherwise call `grimoire_attach` with the path. A folder or a pattern like `~/data/sales_*.csv` reads all matching files as one table with a `filename` column. Never read the file with `read_file`, `cat`, `head` or Python. If `skipped_lines` is in the result, tell the user how many malformed lines were left out.
 3. For a new file, or when data quality matters, call `grimoire_profile`. For one column in depth (quantiles, outliers, top values, rows per month), pass `column`. If it lists `issues`, tell the user in one or two short lines and ask what they mean before relying on them. Examples: "Do empty amounts mean 0?", "Are 'North' and 'north ' the same region?"
 4. Answer with `grimoire_query`. Write one query per question when you can.
-5. Write the answer. Cite the query id next to each number it supports, like `₹9.69 crore [q12]`.
+5. Write the answer. Cite the query id next to each number it supports, like `$9.69M [q12]`.
 
 ## Rules for numbers
 

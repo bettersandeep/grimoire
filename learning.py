@@ -55,7 +55,7 @@ _CONCEPTS = [
     (r"\b(date_trunc|strftime|month\s*\(|year\s*\()", "dates", "date_trunc('month', d) turns every date "
      "into the first day of its month, so GROUP BY can total each month."),
     (r"\bhaving\b", "having", "WHERE filters rows before grouping; HAVING filters groups after the totals "
-     "exist, for example 'regions with revenue over 1 crore'."),
+     "exist, for example 'regions with revenue over $1 million'."),
     (r"\border\s+by\b.*\blimit\b", "top-n", "ORDER BY x DESC LIMIT 1 sorts from the largest down and keeps "
      "the first row: that is how 'which is highest' becomes SQL."),
     (r"\bgroup\s+by\b", "group-by", "GROUP BY makes one result row per value; every other column in SELECT "

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Grimoire">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14524c"/>
+      <stop offset="1" stop-color="#0a2422"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <path d="M8.5 17.5c7.2-3.2 15-3.2 22 0.2v31c-7-3.4-14.8-3.4-22-0.2z" fill="#eef7f4"/>
+  <path d="M55.5 17.5c-7.2-3.2-15-3.2-22 0.2v31c7-3.4 14.8-3.4 22-0.2z" fill="#eef7f4"/>
+  <path d="M14 33.5l4.6 4.6 7.4-9.2" fill="none" stroke="#0f766e" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="37.5" y="34" width="4.2" height="10" rx="1.2" fill="#0f766e"/>
+  <rect x="43.4" y="28.5" width="4.2" height="15.5" rx="1.2" fill="#0f766e"/>
+  <rect x="49.3" y="23" width="4.2" height="21" rx="1.2" fill="#2bb3a3"/>
+</svg>
