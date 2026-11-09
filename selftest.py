@@ -72,10 +72,13 @@ def test_data_quality(tmp, db):
     assert ("region", "spelling variants of one value") in kinds, r["issues"]
     assert ("amount", "text column that is almost all numbers") in kinds, r["issues"]
 
-    # merge: enforced in every query, kept across sessions, raw view kept, undo works
+    # merge: the model only proposes; the user approves; then every query follows it
     r = call(tools.merge, dataset="messy", column="region", values=["north "], into="North")
-    assert r.get("saved"), r
+    assert r["status"] == "pending", r
     q = "SELECT count(*) FROM messy WHERE region = 'North'"
+    assert call(tools.query, sql=q)["rows"] == [[27]]  # not applied yet
+    assert "Waiting for approval" in commands.run("merges")
+    assert "Applied" in commands.run("merges approve")
     assert call(tools.query, sql=q)["rows"] == [[40]]
     tools.setup(db=db, eng=None)  # a new session
     assert call(tools.query, sql=q)["rows"] == [[40]]
@@ -84,6 +87,9 @@ def test_data_quality(tmp, db):
         d for d in call(tools.catalog)["datasets"] if d["dataset"] == "messy")
     assert "error" in call(tools.merge, dataset="messy", column="id", values=["1"], into="2")  # not text
     assert "Removed 1" in commands.run("unmerge messy region")
+    assert call(tools.query, sql=q)["rows"] == [[27]]
+    call(tools.merge, dataset="messy", column="region", values=["north "], into="North")
+    assert "Dropped 1" in commands.run("merges reject")
     assert call(tools.query, sql=q)["rows"] == [[27]]
 
     # JSON, NDJSON and compressed CSV
@@ -100,6 +106,55 @@ def test_data_quality(tmp, db):
     assert status.startswith("Grimoire ") and "messy" in status and "Learning mode" in status, status
     assert "SELECT region" in commands.run("sql q1")
     assert "Unknown command" in commands.run("dance")
+
+    # forget one dataset: its queries, notes and merges go; other data stays
+    call(tools.merge, dataset="messy", column="region", values=["north "], into="North")
+    commands.run("merges approve")
+    before = len(store.recent_queries(db, 1000))
+    messy_queries = db.execute("SELECT count(*) FROM queries WHERE datasets = 'messy'").fetchone()[0]
+    assert messy_queries >= 3, messy_queries
+    out = commands.run("forget messy")
+    assert "Deleted messy" in out, out
+    assert len(store.recent_queries(db, 1000)) == before - messy_queries
+    assert store.merges(db, "messy") == {} and "messy" not in commands.run("")
+    assert "error" in call(tools.query, sql="SELECT count(*) FROM messy")
+    assert call(tools.query, sql="SELECT count(*) FROM sales")["rows"] == [[3]]  # others untouched
+    assert "Deleted" in commands.run("clear history") and store.recent_queries(db) == []
+    assert "cannot be undone" in commands.run("reset")
+    assert "Deleted everything" in commands.run("reset confirm")
+    assert store.datasets(db) == [] and "error" in call(tools.query, sql="SELECT count(*) FROM sales")
+
+
+def test_security(tmp, db):
+    tools.setup(db=db, eng=None)
+    lite = tmp / "sec.db"
+    con = sqlite3.connect(lite)
+    con.execute("CREATE TABLE t (id INTEGER, v REAL)")
+    con.executemany("INSERT INTO t VALUES (?, ?)", [(1, 10.0), (2, 20.0)])
+    con.commit()
+    con.close()
+    assert "error" not in call(tools.attach, path=str(lite))
+    # F1: data-modifying CTEs start like a read but must be refused
+    for bad in ["WITH x AS (SELECT 1) INSERT INTO sec.t VALUES (3, 1)",
+                "WITH x AS (SELECT 1) DELETE FROM sec.t", "WITH x AS (SELECT 1) UPDATE sec.t SET v = 0",
+                "PIVOT sec.t ON id USING sum(v)", "CREATE TABLE z (a INT)", "SELECT 1; SELECT 2"]:
+        assert "error" in call(tools.query, sql=bad), bad
+    assert call(tools.query, sql="SELECT sum(v) FROM sec.t")["rows"] == [[30.0]]
+    assert call(tools.query, sql="SELECT ';' AS semi")["rows"] == [[";"]]  # ';' inside text is fine now
+    for ok in ["FROM sec.t", "DESCRIBE sec.t", "SUMMARIZE sec.t", "SHOW TABLES", "VALUES (1)",
+               "WITH a AS (SELECT 1 AS x) SELECT x FROM a"]:
+        assert "error" not in call(tools.query, sql=ok), ok
+    # F4: results carry the untrusted-data label
+    assert call(tools.query, sql="SELECT 1")["note"] == tools.UNTRUSTED
+    # F6: private folders are refused unless allowed
+    home = Path(tempfile.mkdtemp())
+    assert guard.private_folder(str(home / ".ssh" / "x.csv"), home=str(home)) == ".ssh"
+    assert guard.private_folder(str(home / "Library" / "Messages" / "chat.db"), home=str(home)) == "Library"
+    assert guard.private_folder(str(home / "Library" / "Mobile Documents" / "a.csv"), home=str(home)) is None
+    assert guard.private_folder(str(home / "data" / "a.csv"), home=str(home)) is None
+    hermes_db = Path.home() / ".hermes" / "state.db"
+    r = call(tools.attach, path=str(hermes_db))
+    assert "does not open files in ~/.hermes" in r.get("error", ""), r
 
 
 def call(handler, **args):
@@ -207,6 +262,7 @@ def main():
     assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
 
     test_data_quality(tmp, db)
+    test_security(tmp, db)
     print("selftest passed")
 
 

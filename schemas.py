@@ -77,9 +77,9 @@ NOTE = {
 MERGE = {
     "name": "grimoire_merge",
     "description": (
-        "Merge spelling variants of a value (like 'north ' into 'North') in every query. "
-        "Call it only after the user agrees that the values mean the same thing. "
-        "The rule is saved, applies to all later queries and sessions, and does not change the file."
+        "Propose merging spelling variants of a value, like 'north ' into 'North'. "
+        "The user must approve it with /grimoire merges approve before it applies; tell them so. "
+        "Once approved, it applies to all later queries and sessions, and does not change the file."
     ),
     "parameters": {
         "type": "object",
