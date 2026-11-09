@@ -35,6 +35,8 @@ _messages = OrderedDict()   # session -> the user's last message (for /grimoire 
 _last_qid = OrderedDict()   # session -> the last query id it ran
 _guesses = OrderedDict()    # session -> the user's prediction, waiting for the answer
 _last = {"session": None}
+_calls = OrderedDict()      # session -> (most tools, fewest tokens) one model call sent; numbers only
+LEAN_TOOLS = store.LEAN_TOOLS
 
 
 def _bucket(table, session_id):
@@ -104,6 +106,43 @@ def learning_state():
     return learn, learn and store.get_setting(db, "predict", "off") == "on"
 
 
+def remember_call(session_id, tool_count=None, tokens=None):
+    """Keep the size of each model call to show what a chat costs. Hermes hooks give the tool count
+    (pre_api_request) and the provider's real input tokens (post_api_request); bad values are ignored."""
+    good = lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0
+    with _lock:
+        tools_, fewest = _calls.get(session_id or "", (0, 0))
+        if good(tool_count):
+            tools_ = max(tools_, tool_count)
+        if good(tokens):
+            fewest = min(fewest, tokens) if fewest else tokens
+        if tools_ or fewest:
+            _put(_calls, session_id, (tools_, fewest))
+
+
+def call_size(session_id):
+    """(tools, tokens) of this chat's smallest model call, or None when Hermes did not report it."""
+    with _lock:
+        size = _calls.get(session_id or "")
+    return size if size and all(size) else None
+
+
+def lean_tip(db, session_id):
+    """One-time tip, with this chat's real numbers, when it runs full Hermes. "" otherwise."""
+    size = call_size(session_id)
+    if not size:
+        return ""
+    if store.get_json(db, "call_size", {}) != {"tools": size[0], "tokens": size[1]}:
+        store.set_json(db, "call_size", {"tools": size[0], "tokens": size[1]})  # for the Desktop page
+    if size[0] <= LEAN_TOOLS:
+        return ""
+    if store.get_setting(db, "lean_tip", "") == "shown":
+        return ""
+    store.set_setting(db, "lean_tip", "shown")
+    return (f"\nTip: this chat sends {size[0]} tools and about {size[1]:,} tokens with every model call. "
+            "A Data bot with only Grimoire's tools sends about a fifth of that. How: /grimoire setup")
+
+
 def used_grimoire(session_id):
     with _lock:
         return (session_id or "") in _values
@@ -170,6 +209,10 @@ def check_reply(text, session_id=None):
                 out += card
                 if key_:
                     store.set_json(db, "seen_concepts", (seen + [key_])[-8:])
+    try:
+        out += lean_tip(db, session_id)
+    except Exception:
+        pass  # the tip is extra; never lose the check because of it
     return out
 
 

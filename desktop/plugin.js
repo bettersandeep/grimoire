@@ -114,6 +114,23 @@ function Pending({ pending, act }) {
   ] })
 }
 
+function LeanTip({ tip, act }) {
+  if (!tip) return null
+  return jsxs('section', { className: 'gr-lean', 'aria-label': 'Use fewer tokens', children: [
+    jsxs('div', { className: 'gr-lean-text', children: [
+      jsx('b', { children: 'Use about a fifth of the tokens with a Data bot' }),
+      jsx('p', { children: `Your data chats send ${fmt(tip.tools)} tools and about ${fmt(tip.tokens)} tokens with every model call. A bot with only Grimoire's tools sends about a fifth of that, and answers faster.` }),
+      jsxs('ol', { children: [
+        jsxs('li', { children: ['Open ', jsx('b', { children: 'Bots' }), ', then ', jsx('b', { children: 'New Agent' }), '. Name it Data.'] }),
+        jsxs('li', { children: ['Open ', jsx('b', { children: 'Advanced' }), ' and clone from the profile that has Grimoire.'] }),
+        jsxs('li', { children: ['Under toolsets, keep only ', jsx('b', { children: 'Grimoire' }), ' and ', jsx('b', { children: 'Clarifying Questions' }), '.'] }),
+        jsx('li', { children: "Ask data questions in the Data bot's chat. Your main agent keeps all its tools." })
+      ] })
+    ] }),
+    jsx('button', { className: 'gr-btn gr-small', onClick: () => act.mutate({ path: '/settings', body: { hide_lean_tip: true } }), children: 'Hide' })
+  ] })
+}
+
 function issueText(i) {
   if (i.issue === 'duplicate rows') return `${fmt(i.rows)} duplicate rows`
   if (i.issue === 'empty values') return `${i.column}: ${fmt(i.percent)}% empty`
@@ -257,6 +274,7 @@ function GrimoirePage() {
     summary.error ? jsx('p', { className: 'gr-error gr-pad', children: `Grimoire is not reachable: ${errorText(summary.error)}. Check that the plugin is enabled.` }) : null,
     jsxs('main', { className: 'gr-body', children: [
       jsx(Pending, { pending: summary.data?.pending, act }),
+      jsx(LeanTip, { tip: summary.data?.lean_tip, act }),
       jsxs('section', { children: [jsx('h3', { className: 'gr-h', children: 'Files' }), jsx(Files, { datasets: summary.data?.datasets, act, filter, setFilter })] }),
       summary.data?.metrics?.length ? jsxs('section', { children: [
         jsx('h3', { className: 'gr-h', children: 'Saved metrics' }),
@@ -288,6 +306,9 @@ const CSS = `
 .gr-body{flex:1;min-height:0;overflow:auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:18px}
 .gr-h{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--ui-text-secondary);display:flex;align-items:center;gap:8px}
 .gr-pending{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:8px;border:1px solid color-mix(in srgb,var(--ui-accent) 40%,transparent);background:color-mix(in srgb,var(--ui-accent) 8%,transparent)}
+.gr-lean{display:flex;gap:16px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid var(--ui-stroke-secondary)}
+.gr-lean-text{flex:1;min-width:0}.gr-lean p{margin:4px 0 0;color:var(--ui-text-secondary)}.gr-lean ol{margin:6px 0 0;padding-left:20px;color:var(--ui-text-secondary);display:flex;flex-direction:column;gap:2px}
+.gr-lean ol b{color:var(--foreground);font-weight:500}
 .gr-pending-text{flex:1;min-width:0}.gr-pending ul{margin:4px 0 0;padding-left:18px;color:var(--ui-text-secondary)}.gr-actions{display:flex;gap:8px}
 .gr-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ui-stroke-secondary);border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer;color:var(--foreground);background:transparent}
 .gr-btn:hover{background:var(--chrome-action-hover)}.gr-small{padding:3px 9px;font-size:12px}.gr-btn[data-armed]{color:var(--ui-red,var(--foreground));border-color:currentColor}

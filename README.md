@@ -24,20 +24,32 @@ Hermes asks before it installs the one dependency, `duckdb`.
 Needs Hermes 0.23.0 or later and Python 3.11 or later.
 Update with `hermes plugins update grimoire`.
 
-## Fastest setup
+## Fastest setup: a Data bot
 
 Most of the tokens in an answer are Hermes's own system prompt and tool list, sent with every model call (about 11,000 tokens, mostly cached).
-For data work, load only Grimoire's tools:
+A Data bot loads only Grimoire's tools, so each call sends about a fifth of that.
+Your main agent keeps all its tools.
+Grimoire never changes your settings; it only tells you how.
 
-```sh
-hermes chat -t grimoire
-```
+In Hermes Desktop:
+
+1. Open **Bots**, then **New Agent**. Name it Data.
+2. Open **Advanced** and clone from the profile that has Grimoire (usually default).
+3. Under toolsets, keep only **Grimoire** and **Clarifying Questions**.
+4. Ask data questions in the Data bot's chat.
+
+In a terminal: `hermes chat -t grimoire,clarify`.
+
+You do not need to remember this.
+The first time a data answer comes from a chat with all of Hermes's tools, Grimoire adds one line with that chat's real numbers, for example "this chat sends 21 tools and about 13,138 tokens with every model call".
+`/grimoire setup` shows the steps again, `/grimoire` shows the numbers for the current chat, and the Desktop Data page shows the steps until you hide them.
 
 Same question, same free model, measured on 2026-11-09:
 
-| | Hermes default tools | `-t grimoire` |
+| | Hermes default tools | Data bot (Grimoire's tools only) |
 |---|---|---|
 | Tokens per answer | about 23,300 | about 4,300 (82% fewer) |
+| Correct, 8 benchmark questions | 8 of 8 | 8 of 8 |
 | Time per answer | 15 to 22 s | about 13 s |
 | Time spent in Grimoire and DuckDB | under 0.3 s | under 0.3 s |
 
@@ -86,6 +98,7 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 | `/grimoire forget <dataset>` | Delete everything saved about one file |
 | `/grimoire clear history` | Delete all saved queries and results |
 | `/grimoire reset confirm` | Delete everything Grimoire saved |
+| `/grimoire setup` | How to use fewer tokens with a Data bot |
 
 ## Hermes Desktop
 
@@ -119,7 +132,7 @@ Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above 
 - **Opening files before the model starts:** when your message names a data file that exists, Grimoire opens it (read only, same rules as above) and gives the model its table name and columns.
 - **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
 - **Network:** none. Grimoire makes no network calls; your model provider sees what the model sees, as with any Hermes tool.
-- **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (adds a one-line hint when a message names a data file, and the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the number check and, when on, the learning card).
+- **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (adds a one-line hint when a message names a data file, and the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the number check and, when on, the learning card), `pre_api_request` and `post_api_request` (keep two numbers per model call in memory, the tool count and the provider's input token count, to show what a chat costs; no message content).
 - **Limits:** queries stop after 30 s; DuckDB may use half of your memory; results are capped at 200 rows; SQLite files over 2 GB are refused.
 
 ## Safety

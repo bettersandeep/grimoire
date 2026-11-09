@@ -12,6 +12,7 @@ from . import engine, learning, metrics, report, store, tools
 
 HELP = """Commands:
   /grimoire                          status
+  /grimoire setup                    use fewer tokens: a Data bot with only Grimoire's tools
   /grimoire sql q12                  the SQL and result behind a query id
   /grimoire explain q12              how your question became that SQL
   /grimoire chart q12                a bar chart of a result
@@ -30,6 +31,20 @@ HELP = """Commands:
   /grimoire reset confirm            delete everything Grimoire saved"""
 
 
+SETUP = """Use fewer tokens: chat with a Data bot that has only Grimoire's tools.
+Full Hermes sends every tool (terminal, browser, web and more) with every model call.
+A bot with only Grimoire's tools sends about a fifth of that, and answers faster.
+
+In Hermes Desktop:
+  1. Open Bots, then New Agent. Name it Data.
+  2. Open Advanced. Clone from the profile that has Grimoire (usually default).
+  3. Under toolsets, turn everything off except Grimoire and Clarifying Questions.
+  4. Create, then ask data questions in the Data bot's chat.
+Your main agent keeps all its tools. Grimoire never changes your settings.
+
+In a terminal: hermes chat -t grimoire,clarify"""
+
+
 def version():
     text = (Path(__file__).resolve().parent / "plugin.yaml").read_text(encoding="utf-8")
     m = re.search(r'^version:\s*"?([^"\n]+)"?', text, re.M)
@@ -42,7 +57,9 @@ def run(raw_args="", **kwargs):
         words = (raw_args or "").split()
         cmd, rest = (words[0].lower(), words[1:]) if words else ("status", [])
         if cmd in ("status", "help"):
-            return _status(db, eng)
+            return _status(db, eng, kwargs.get("session_id"))
+        if cmd == "setup":
+            return SETUP
         if cmd == "sql" and rest:
             return _sql(db, rest[0])
         if cmd == "explain" and rest:
@@ -116,7 +133,7 @@ def run(raw_args="", **kwargs):
         return f"/grimoire failed: {exc}"
 
 
-def _status(db, eng):
+def _status(db, eng, session_id=None):
     sets = store.datasets(db)
     lines = [f"Grimoire {version()}"]
     if sets:
@@ -130,6 +147,11 @@ def _status(db, eng):
     stats = store.get_json(db, "predictions", {"asked": 0, "close": 0})
     score = f" ({stats['close']} of {stats['asked']} guesses within 10%)" if predict and stats["asked"] else ""
     lines.append(f"Learning mode: {'on' if learn else 'off'} · Predictions: {'on' if predict else 'off'}{score}")
+    size = tools.call_size(session_id)
+    if size:
+        lean = size[0] <= tools.LEAN_TOOLS
+        lines.append(f"This chat: {size[0]} tools, about {size[1]:,} tokens per model call"
+                     + (" (lean setup)" if lean else ". For fewer tokens: /grimoire setup"))
     return "\n".join(lines + ["", HELP])
 
 
