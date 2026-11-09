@@ -31,6 +31,12 @@ Also when they refer to data they used before.
 - Say which rows you kept: for example "over 48,004 orders that have an amount".
 - If you are not sure what a column means, ask, then save the answer with `grimoire_note`.
 
+## Why did it change?
+
+For "why did X go up or down between two periods", call `grimoire_drivers` with the time column and the two periods (`2026-02`, `2026-03`).
+It returns the total change and the segments that moved most, with their share of the change.
+Name the top two or three segments with their numbers and cite the query id.
+
 ## Saved metrics
 
 If the context or `grimoire_catalog` lists saved metrics, use them by name in SQL, like `revenue()`.

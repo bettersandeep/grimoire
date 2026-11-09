@@ -7,6 +7,7 @@ import threading
 from collections import OrderedDict
 
 from . import audit
+from . import drivers as drivers_sql
 from . import engine
 from . import guard
 from . import learning
@@ -354,6 +355,52 @@ def query(args, session_id=None, **kwargs):
         return _err(str(exc))
     except Exception as exc:
         return _err(f"query failed: {exc}")
+
+
+def drivers(args, session_id=None, **kwargs):
+    try:
+        db, eng = _get()
+        _sync(db, eng)
+        dataset = args.get("dataset", "")
+        ref = _resolve_table(eng, dataset, args.get("table"))
+        table = _sql_ref(ref)
+        types = dict(eng.schema(table))
+        time_column = args.get("time_column", "")
+        if time_column not in types:
+            return _err(f"No column '{time_column}' in {ref}. Columns: {', '.join(types)}")
+        measure, _used = metrics.expand(args.get("measure", "") or "count(*)", store.metrics(db))
+        dims = [d for d in (args.get("dimensions") or []) if d in types and d != time_column]
+        if not dims:  # text columns with 2 to 50 values: the ones a change can be split by
+            text = [c for c, t in types.items() if t == "VARCHAR" and c != time_column]
+            if text:
+                counts = eng.query("SELECT " + ", ".join(f"approx_count_distinct({engine.ident(c)})" for c in text)
+                                   + f" FROM {table}", engine.SETUP_TIMEOUT_S)[1][0]
+                dims = [c for c, n in zip(text, counts) if 2 <= (n or 0) <= 50]
+        dims = dims[:drivers_sql.MAX_DIMENSIONS]
+        if not dims:
+            return _err("No column to split by. Pass dimensions: text columns such as region or category.")
+        sql = drivers_sql.build_sql(table, measure, time_column, str(args.get("before", "")),
+                                    str(args.get("after", "")), dims)
+        columns, rows, truncated = eng.query(sql, engine.SETUP_TIMEOUT_S)
+        if not rows or rows[0][2] is None and rows[0][3] is None:
+            return _err("No rows fall in either period. Check the periods and the time column.")
+        with _lock:
+            question = _messages.get(session_id or "")
+        purpose = args.get("purpose") or f"What drives the change in {measure} from {args.get('before')} to {args.get('after')}"
+        qid = store.save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=[dataset],
+                               question=question)
+        remember(session_id, rows)
+        with _lock:
+            _put(_last_qid, session_id, qid)
+        note = ("pct_of_change: each segment's share of the total change; shares in one dimension add up to 100."
+                if drivers_sql.additive(measure) else
+                "The measure is not a plain sum or count, so pct_of_change does not add up; compare before and after.")
+        return _ok(id=qid, split_by=dims, columns=columns, rows=rows, how_to_read=note, note=UNTRUSTED,
+                   cite=f"Cite numbers from this result as [{qid}].")
+    except engine.EngineError as exc:
+        return _err(str(exc))
+    except Exception as exc:
+        return _err(f"drivers failed: {exc}")
 
 
 def merge(args, **kwargs):

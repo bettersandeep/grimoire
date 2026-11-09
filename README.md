@@ -56,6 +56,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (an incomplete last month, an average of averages, a join that counts rows twice) and a verdict: ready to share, share with caveats, or needs revision |
 | Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, spelling variants ('North' and 'north ') |
 | Column statistics | Quantiles, outliers, top values, rows per month |
+| Explains changes | "Why did revenue drop in March?": the total change split by each category column, with each segment's share |
 | Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL |
 | Remembers | Files, column notes and merge rules across sessions |
 | Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
@@ -92,7 +93,7 @@ Like every Desktop plugin it starts off; turn it on under **Capabilities → Plu
 
 ## Tools the model gets
 
-`grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.
+`grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_drivers`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.
 
 ## Benchmark
 
