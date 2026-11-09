@@ -6,6 +6,7 @@ Pure functions only; no Hermes or DuckDB imports.
 """
 
 import bisect
+import math
 import re
 
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
@@ -52,6 +53,8 @@ def extract(text):
         if len(core) > 1 and core[0] == "0" and core[1].isdigit():
             continue  # a zero-padded code, like the month 06
         number = float(core.replace(",", ""))
+        if not math.isfinite(number):
+            continue  # 309 or more digits: not a claim, and it would overflow later checks
         decimals = len(core.split(".", 1)[1]) if "." in core else 0
         plain_int = decimals == 0 and "," not in core and not unit
         if plain_int and 1900 <= number <= 2100:
@@ -117,7 +120,15 @@ def _pairs(values, ratios):
 
 
 def check(text, values, ignore=(), totals=()):
-    """Split the claims in text into (sourced, derived, unsourced) lists of raw strings.
+    """(sourced, derived, unsourced) lists of raw strings; see check_detail."""
+    return check_detail(text, values, ignore, totals)[:3]
+
+
+def check_detail(text, values, ignore=(), totals=()):
+    """Split the claims in text into (sourced, derived, unsourced, loose) lists of raw strings.
+    loose: derived claims that only match by combining two result values the reply does not show.
+    With a few hundred result values there are about 270k such combinations, so an invented number
+    can match by chance; the verdict then asks the reader to check them.
 
     values: numbers from tool results. ignore: raw strings to skip (numbers the user typed).
     totals: column totals of cited results. A claim is "derived" when simple arithmetic on
@@ -138,20 +149,25 @@ def check(text, values, ignore=(), totals=()):
     shown = sorted(shown)
     sums = sorted(_pairs(shown, ratios=False))
     # ponytail: pairs of pool values only while the pool is small (O(n^2)); cited results are usually small.
-    basis = sorted(set(shown) | {abs(t) for t in totals} | (set(pool) if len(pool) <= MAX_PAIR_POOL else set()))
-    other = _pairs(basis, ratios=True) | {abs(t) for t in totals}
+    strong = set(shown) | {abs(t) for t in totals}
+    other = _pairs(sorted(strong), ratios=True) | {abs(t) for t in totals}
+    units = set()  # cents to dollars, units to thousands; a percent has its own x100 rule in _matches
     for f in (100.0, 1000.0):
-        other |= {v * f for v in pool} | {v / f for v in pool}
-    wide = sorted(other)
-    derived, unsourced = [], []
+        units |= {v * f for v in pool} | {v / f for v in pool}
+    wide, wide_pct = sorted(other | units), sorted(other)
+    hidden = sorted(_pairs(sorted(strong | set(pool)), ratios=True)) if len(pool) <= MAX_PAIR_POOL else []
+    derived, unsourced, loose = [], [], []
     for claim in rest:
         # ponytail: a small whole number (under 100) is easy to hit by chance, so it may only be a sum or
         # difference of two numbers the reply shows; bigger or decimal numbers may also be a unit change,
         # ratio, share or column total.
         small = claim["value"] < 100 and claim["value"] == int(claim["value"]) and not claim["percent"]
-        ok = _matches(sums if small else wide, claim["value"], claim["tol"], claim["percent"])
+        ok = _matches(sums if small else wide_pct if claim["percent"] else wide, claim["value"], claim["tol"], claim["percent"])
+        if not ok and not small and _matches(hidden, claim["value"], claim["tol"], claim["percent"]):
+            ok = True
+            loose.append(claim["raw"])
         (derived if ok else unsourced).append(claim["raw"])
-    return [c["raw"] for c in sourced], derived, unsourced
+    return [c["raw"] for c in sourced], derived, unsourced, loose
 
 
 def footer(sourced, unsourced, derived=()):

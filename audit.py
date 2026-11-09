@@ -56,9 +56,6 @@ def _value(eng, sql):
     return rows[0][0] if rows else None
 
 
-_count = _value
-
-
 def _plain(cond):
     """A WHERE condition in plain words, for the common shapes; else the condition itself, shortened."""
     m = _IN.match(cond.strip())
@@ -83,8 +80,8 @@ def assumptions(q, eng):
         m = _SIMPLE_FROM.match(frm) if "WITH" not in names else None
         total = kept = None
         if m:  # one plain table: count what the filter removed (two small counts)
-            total = _count(eng, f"SELECT count(*) FROM {m.group(1)}")
-            kept = _count(eng, f"SELECT count(*) FROM {m.group(1)} WHERE {cond}")
+            total = _value(eng, f"SELECT count(*) FROM {m.group(1)}")
+            kept = _value(eng, f"SELECT count(*) FROM {m.group(1)} WHERE {cond}")
         if total is not None and kept is not None:
             if total > kept:
                 out.append(f"left out {total - kept:,} of {total:,} rows ({_plain(cond)})")
@@ -151,8 +148,8 @@ def pitfalls(q, eng):
         left, right = j.group(1), j.group(3)
         key_l = j.group(5) or j.group(7)
         key_r = j.group(5) or j.group(9)
-        dup_l = _count(eng, f'SELECT count(*) - count(DISTINCT "{key_l}") FROM {left}')
-        dup_r = _count(eng, f'SELECT count(*) - count(DISTINCT "{key_r}") FROM {right}')
+        dup_l = _value(eng, f'SELECT count(*) - count(DISTINCT "{key_l}") FROM {left}')
+        dup_r = _value(eng, f'SELECT count(*) - count(DISTINCT "{key_r}") FROM {right}')
         if dup_l and dup_r:
             out.append(f"the join on {key_l} matches several rows on both sides, so rows can be counted more than once")
     variants = _result_variants(q)
@@ -198,9 +195,14 @@ def _result_variants(q):
 def _incomplete_period(q, eng, column, kind):
     """Warn when the result includes the last month or year and the data stops before it ends."""
     for name in q.get("datasets") or []:
-        last = _value(eng, f'SELECT max("{column}") FROM {engine.ident(name)}')
-        if last is None:
+        found = _rows(eng, f'SELECT max("{column}"), bool_and(day(try_cast("{column}" AS DATE)) = 1), '
+                           f'bool_and(month(try_cast("{column}" AS DATE)) = 1) '
+                           f'FROM {engine.ident(name)}')
+        if not found or found[0][0] is None:
             continue  # this dataset has no such column (or the check was slow); try the next
+        last, monthly, yearly = found[0]
+        if (kind == "month" and monthly) or yearly and monthly:
+            return None  # one row per month (or year) dated on its first day: the last period is whole
         day = datetime.date.fromisoformat(str(last)[:10])
         if kind == "month":
             label, end = day.strftime("%Y-%m"), calendar.monthrange(day.year, day.month)[1]
@@ -238,9 +240,13 @@ def verdict(unsourced, warnings):
     return "share with caveats" if warnings else "ready to share"
 
 
-def review(queries, eng, unsourced):
-    """Footer lines for the cited queries: (verdict, [lines]). Empty lines when there is nothing to say."""
+def review(queries, eng, unsourced, loose=()):
+    """Footer lines for the cited queries: (verdict, [lines]). Empty lines when there is nothing to say.
+    loose: numbers that match only by combining two result values; the reader should check how."""
     assumed, warned = [], []
+    if loose:
+        warned.append(f"{' · '.join(dict.fromkeys(loose))} only match by combining two values from the result; "
+                      "check how they were worked out, or compute them in SQL")
     for q in queries[-MAX_QUERIES:]:
         assumed += [f"{a} [{q['id']}]" for a in assumptions(q, eng)]
         warned += [f"{w} [{q['id']}]" for w in pitfalls(q, eng)]

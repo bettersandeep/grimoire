@@ -3,7 +3,7 @@
 The page sends names and choices, never SQL. Every name must be a real column; values go in as literals.
 """
 
-from .engine import ident, literal
+from .engine import ident, is_number_type, literal
 
 MEASURES = {"count": "count(*)", "sum": "sum({})", "avg": "avg({})", "min": "min({})", "max": "max({})"}
 WORDS = {"count": "Rows", "sum": "Total", "avg": "Average", "min": "Smallest", "max": "Largest"}
@@ -20,7 +20,7 @@ def kind(typ):
     t = typ.upper()
     if t.startswith(TIME_TYPES):
         return "time"
-    if any(w in t for w in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC", "HUGEINT")):
+    if is_number_type(t):
         return "number"
     return "text"
 

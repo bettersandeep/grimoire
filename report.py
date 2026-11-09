@@ -311,7 +311,8 @@ def _svg_bars(q):
         w = max(1, abs(r[vi]) / top * bar_w)
         parts.append(f'<text x="{label_w - 8}" y="{y + 15}" text-anchor="end" class="lbl">'
                      f'{html.escape(str(r[li])[:20])}</text>')
-        parts.append(f'<rect x="{label_w}" y="{y + 3}" width="{w:.1f}" height="{h - 8}" rx="2" class="bar{' neg' if r[vi] < 0 else ''}"/>')
+        cls = "bar neg" if r[vi] < 0 else "bar"
+        parts.append(f'<rect x="{label_w}" y="{y + 3}" width="{w:.1f}" height="{h - 8}" rx="2" class="{cls}"/>')
         parts.append(f'<text x="{label_w + w + 6:.1f}" y="{y + 15}" class="val">{html.escape(_short(r[vi]))}</text>')
     parts.append("</svg>")
     return "".join(parts)

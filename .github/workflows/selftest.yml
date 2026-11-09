@@ -1,0 +1,26 @@
+name: selftest
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python: "3.11"  # the floor in pyproject.toml
+            duckdb: "duckdb==1.4.2"  # the floor
+          - python: "3.13"
+            duckdb: "duckdb<2"  # the newest allowed
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: grimoire
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install "${{ matrix.duckdb }}"
+      - run: python -I grimoire/selftest.py

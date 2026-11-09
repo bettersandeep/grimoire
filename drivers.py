@@ -17,7 +17,8 @@ def additive(measure):
     """True for a plain sum or count, optionally scaled by a constant (shares of the change add up)."""
     core = re.sub(r"\s*[/*]\s*\d+(\.\d+)?\s*$", "", measure.strip())
     core = re.sub(r"^\((.*)\)$", r"\1", core.strip()).strip()
-    return bool(re.fullmatch(r"(sum|count)\s*\([^()]*\)", core, re.I))
+    # count(DISTINCT x) is not additive: a customer in two regions counts once in total, twice in the parts
+    return bool(re.fullmatch(r"(sum|count)\s*\([^()]*\)", core, re.I)) and not re.search(r"\bdistinct\b", core, re.I)
 
 
 def build_sql(table, measure, time_column, before, after, dimensions):

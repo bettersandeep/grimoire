@@ -20,6 +20,8 @@ import time
 import uuid
 from pathlib import Path
 
+from . import guard
+
 MAX_ROWS = 200
 TIMEOUT_S = 30          # one model query
 SETUP_TIMEOUT_S = 120   # opening, scanning or profiling a file
@@ -52,6 +54,13 @@ def _duckdb():
             "DuckDB is not installed. Reinstall or re-enable the grimoire plugin and accept its Python dependencies."
         ) from exc
     return duckdb
+
+
+def cut(value, limit=60):
+    """A value from a file, shortened before it reaches the model: long text there could carry instructions."""
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"
 
 
 def ident(name):
@@ -125,21 +134,23 @@ def dataset_name(path, name=None):
     return safe_name(name or base)
 
 
-def _memory_limit():
-    """Half of physical memory, so one query cannot take the whole machine."""
+def _memory_limit(share=2):
+    """A share of physical memory (half by default), so one query cannot take the whole machine."""
     try:
-        return f"{os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') // 2 // 1024**2}MiB"
+        return f"{os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') // share // 1024**2}MiB"
     except (AttributeError, ValueError, OSError):
         return "4GiB"
 
 
 class Engine:
-    def __init__(self):
+    def __init__(self, memory_share=2):
+        self._memory_share = memory_share  # the Data page runs several small engines: each gets a smaller share
         self._sources = {}  # dataset name -> (path, kind)
         self._tables = {}   # dataset name -> list of table references
         self._merges = {}   # dataset name -> {(table, column): {from_value: to_value}}
         self._rejects = {}  # (path, mtime, size) -> (count, first rejected lines)
         self._opened = {}   # dataset name -> (path, mtime, size) when its view or copy was built
+        self._widen = {}    # (path, mtime, size) -> {column: type} for whole-number columns with later decimals
         self._con = None
         # ponytail: one lock for all sessions; per-connection cursors if gateway concurrency hurts.
         self._lock = threading.RLock()
@@ -153,11 +164,13 @@ class Engine:
             raise EngineError(f"Unknown dataset '{dataset}'. Attach it first.")
         return list(self._tables[dataset])
 
-    def attach(self, path, name=None, merges=None):
-        """merges: {(table, column): {from_value: to_value}} applied to every query of this dataset."""
+    def attach(self, path, name=None, merges=None, allow_private=False):
+        """merges: {(table, column): {from_value: to_value}} applied to every query of this dataset.
+        Files in private folders (credentials, app data) are refused unless allow_private; every file a
+        folder or pattern expands to is checked, after links are resolved."""
         expanded = os.path.expanduser(str(path))
         if is_many(expanded):
-            return self._attach_many(expanded, name, merges)
+            return self._attach_many(expanded, name, merges, allow_private)
         real = os.path.realpath(expanded)
         try:
             os.stat(real)
@@ -170,6 +183,9 @@ class Engine:
             pass
         if not os.path.isfile(real):
             raise EngineError(f"File not found: {path}")
+        folder = guard.private_folder(real)
+        if folder and not allow_private:
+            raise EngineError(guard.private_error(folder))
         if not os.access(real, os.R_OK):
             raise EngineError(f"No permission to read {path}.")
         kind = kind_of(real)
@@ -180,7 +196,7 @@ class Engine:
             )
         return self._add(real, kind, dataset_name(real, name), merges, path)
 
-    def _attach_many(self, pattern, name, merges):
+    def _attach_many(self, pattern, name, merges, allow_private=False):
         real = os.path.realpath(pattern)
         try:
             files = files_of(real)
@@ -188,6 +204,10 @@ class Engine:
             raise EngineError(f"macOS or your system blocked access to {pattern}.") from exc
         if not files:
             raise EngineError(f"No data files match {pattern}.")
+        for f in files:
+            folder = guard.private_folder(f)
+            if folder and not allow_private:
+                raise EngineError(guard.private_error(folder))
         kinds = {kind_of(f) for f in files}
         if len(kinds) != 1 or None in kinds or "sqlite" in kinds:
             raise EngineError("A folder or pattern must hold files of one kind: all CSV, all JSON or all Parquet.")
@@ -254,12 +274,14 @@ class Engine:
         con = _duckdb().connect(":memory:", config={
             "autoinstall_known_extensions": False,
             "autoload_known_extensions": False,
-            "memory_limit": _memory_limit(),
+            "memory_limit": _memory_limit(self._memory_share),
         })
         con.execute("SET enable_progress_bar = false")
         tables, readable = {}, []
         for dataset, (path, kind) in self._sources.items():
             merges = self._merges.get(dataset) or {}
+            if not os.path.isfile(path) and not (is_many(path) and files_of(path)):
+                continue  # the file was deleted or moved: drop its table, keep every other dataset working
             if kind == "sqlite":
                 tables[dataset] = _copy_sqlite(con, dataset, path)
                 for ref in tables[dataset]:
@@ -276,6 +298,13 @@ class Engine:
                 key = _file_key(path)
                 if key not in self._rejects:
                     self._rejects[key] = _with_timeout(con, SETUP_TIMEOUT_S, _scan_files, con, files, is_many(path))
+            key = _file_key(path)
+            if key not in self._widen:
+                try:
+                    self._widen[key] = _with_timeout(con, SETUP_TIMEOUT_S, _late_decimals, con, kind, source + ")")
+                except Exception:
+                    self._widen[key] = {}  # ponytail: a timeout keeps the sampled types; such files are huge
+            source += _pin_types(con, kind, source + ")", self._widen[key])
             source += ")"
             own = merges_for(merges, dataset)
             if own:
@@ -287,7 +316,7 @@ class Engine:
         con.execute("SET allowed_paths = ?", [readable])
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
-        self._opened = {name: _file_key(path) for name, (path, _kind) in self._sources.items()}
+        self._opened = {name: _file_key(path) for name, (path, _kind) in self._sources.items() if name in tables}
         old, self._con, self._tables = self._con, con, tables
         if old is not None:
             old.close()
@@ -359,7 +388,7 @@ class Engine:
         q = lambda sql: self.query(sql, SETUP_TIMEOUT_S)[1]
         filled, empty = q(f"SELECT count({c}), count(*) - count({c}) FROM {table}")[0]
         out = {"column": column, "type": typ, "filled": filled, "empty": empty}
-        numeric = any(t in typ for t in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC", "HUGEINT"))
+        numeric = is_number_type(typ)
         if numeric and filled:
             row = q(f"SELECT min({c}), quantile_cont({c}, [0.05, 0.25, 0.5, 0.75, 0.95]), max({c}), avg({c}), "
                     f"stddev_samp({c}), count(*) FILTER ({c} < 0), count(*) FILTER ({c} = 0) FROM {table}")[0]
@@ -382,7 +411,7 @@ class Engine:
                 f"min(length({c}::VARCHAR)), max(length({c}::VARCHAR)) FROM {table}")[0]
             top = q(f"SELECT {c}, count(*) n FROM {table} WHERE {c} IS NOT NULL GROUP BY 1 ORDER BY n DESC, 1 LIMIT 10")
             out.update(distinct=distinct, blank_text=blank, length=[shortest, longest],
-                       top_values=[[v, n] for v, n in top])
+                       top_values=[[cut(v), n] for v, n in top])
         return out
 
     def duplicate_rows(self, table):
@@ -409,12 +438,12 @@ class Engine:
                         f"SELECT DISTINCT {c} FROM {table} WHERE {c} IS NOT NULL "
                         f"AND try_cast({c} AS {target}) IS NULL LIMIT 3")[1]]
                     found.append({"column": col, "issue": f"text column that is almost all {label}s",
-                                  "bad_rows": filled - ok, "examples": bad})
+                                  "bad_rows": filled - ok, "examples": [cut(b) for b in bad]})
             if (r.get("approx_unique") or 0) <= 1000:
                 counts = dict(self.query(f"SELECT {c}, count(*) FROM {table} WHERE {c} IS NOT NULL GROUP BY 1")[1])
                 for group in variant_groups(counts)[:5]:
                     found.append({"column": col, "issue": "spelling variants of one value",
-                                  "variants": [{"value": v, "rows": counts[v]} for v in group]})
+                                  "variants": [{"value": cut(v), "rows": counts[v]} for v in group]})
         return found + self.suspicious(table, profile_rows)
 
     def suspicious(self, table, profile_rows, today=None):
@@ -436,7 +465,6 @@ class Engine:
 PLACEHOLDERS = ("n/a", "na", "#n/a", "null", "none", "nil", "-", "--", "?", "unknown", "tbd", "missing")
 SENTINELS = (-9999999, -999999, -99999, -9999, -999, 999, 9999, 99999, 999999, 9999999)
 _AMOUNT = re.compile(r"amount|price|cost|revenue|sales|total|qty|quantity|units|cents|paise|fare|fee", re.I)
-_NUMBER_TYPES = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC")
 
 
 def _key(text):
@@ -524,7 +552,7 @@ def suspicious_checks(profile_rows, today):
         if typ == "VARCHAR":
             checks.append((f"count_if(lower(trim({c})) IN ({placeholder_list}))",
                            {"column": col, "issue": "placeholder text like 'N/A', '-' or 'unknown'"}))
-        elif any(t in typ for t in _NUMBER_TYPES):
+        elif is_number_type(typ):
             for v in {_as_number(lo), _as_number(hi)} & set(SENTINELS):
                 checks.append((f"count_if({c} = {v:g})", {"column": col, "issue": f"{v:g} may be a placeholder", "value": v}))
             if _AMOUNT.search(col) and (_as_number(lo) or 0) < 0:
@@ -555,6 +583,42 @@ def _with_timeout(con, seconds, fn, *args):
         return fn(*args)
     finally:
         timer.cancel()
+
+
+_WHOLE = {"TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
+          "UHUGEINT"}
+_FRACTION = {"DOUBLE", "FLOAT", "REAL"}
+
+
+def is_number_type(typ):
+    """True for a single number column; not for INTERVAL, a list such as BIGINT[], or a struct."""
+    t = str(typ).upper().strip()
+    return t in _WHOLE or t in _FRACTION or bool(re.fullmatch(r"(DECIMAL|NUMERIC)(\(\d+,\s*\d+\))?", t))
+
+
+def _late_decimals(con, kind, source):
+    """{column: 'DOUBLE'} for columns DuckDB typed as whole numbers from its sample of the first rows, but that
+    hold decimals further down (30,000 rows of 100, then 0.4: the 0.4 would be read as 0). One full read."""
+    whole = [c for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall() if t in _WHOLE]
+    if not whole:
+        return {}
+    if kind == "csv":  # every value as text, so "N/A" or "0.4" cannot hide behind the sampled type
+        text = source[:-1] + ", all_varchar = true)"
+        frac = lambda c: f"bool_or(try_cast({ident(c)} AS DOUBLE) <> floor(try_cast({ident(c)} AS DOUBLE)))"
+        found = con.execute(f"SELECT {', '.join(frac(c) for c in whole)} FROM {text}").fetchone()
+        return {c: "DOUBLE" for c, yes in zip(whole, found) if yes}
+    full = dict((c, t) for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM {source[:-1]}, sample_size = -1)").fetchall())
+    return {c: "DOUBLE" for c in whole if full.get(c) in ("DOUBLE", "FLOAT") or str(full.get(c, "")).startswith("DECIMAL")}
+
+
+def _pin_types(con, kind, source, widen):
+    """Reader options that fix the widened column types: types for CSV; for JSON every column must be named."""
+    if not widen:
+        return ""
+    if kind == "csv":
+        return ", types = {" + ", ".join(f"{literal(c)}: '{t}'" for c, t in widen.items()) + "}"
+    cols = [(c, widen.get(c, t)) for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()]
+    return ", columns = {" + ", ".join(f"{literal(c)}: {literal(t)}" for c, t in cols) + "}"
 
 
 def _scan_files(con, files, label):
@@ -633,11 +697,10 @@ def _copy_sqlite(con, dataset, path):
             cur = src.execute(f"SELECT * FROM {ident(name)}")
             cols = [d[0] for d in cur.description]
             target = f"{ident(dataset)}.{ident(name)}"
-            first = cur.fetchmany(1000)
-            col_defs = ", ".join(f"{ident(c)} {_duck_type(first, i)}" for i, c in enumerate(cols))
+            col_defs = ", ".join(f"{ident(c)} {t}" for c, t in zip(cols, _sqlite_types(src, name, cols)))
             con.execute(f"CREATE TABLE {target} ({col_defs})")
             marks = ", ".join("?" for _ in cols)
-            batch = first
+            batch = cur.fetchmany(10000)
             while batch:
                 con.executemany(f"INSERT INTO {target} VALUES ({marks})", [list(r) for r in batch])
                 batch = cur.fetchmany(10000)
@@ -647,13 +710,16 @@ def _copy_sqlite(con, dataset, path):
         src.close()
 
 
-def _duck_type(sample, index):
-    """Pick a DuckDB type from sampled SQLite values (SQLite columns are loosely typed)."""
-    kinds = {type(r[index]) for r in sample if r[index] is not None}
-    if kinds <= {int}:
-        return "BIGINT"
-    if kinds <= {int, float}:
-        return "DOUBLE"
-    if kinds <= {bytes}:
-        return "BLOB"
-    return "VARCHAR"
+def _sqlite_types(src, table, cols):
+    """A DuckDB type per column from the storage classes of every row (SQLite columns are loosely typed:
+    a DECIMAL column holds 100 as integer and 100.49 as real; a text value can come after a million numbers)."""
+    if not cols:
+        return []
+    parts = [f"max(typeof({ident(c)}) = '{k}')" for c in cols for k in ("integer", "real", "blob", "text")]
+    flags = src.execute(f"SELECT {', '.join(parts)} FROM {ident(table)}").fetchone()
+    out = []
+    for i in range(len(cols)):
+        integer, real, blob, text = (bool(x) for x in flags[4 * i:4 * i + 4])
+        out.append("VARCHAR" if text or (blob and (integer or real)) else "BLOB" if blob
+                   else "DOUBLE" if real else "BIGINT")
+    return out

@@ -211,7 +211,15 @@ def save_merge(db, dataset, table, column, values, into):
 
 
 def _upsert_merge(db, target, dataset, table, column, values, into):
+    """Save value -> into rules, kept as chains of one step: after A -> B and then B -> C, A goes to C."""
     now = time.time()
+    where = "dataset = ? AND tbl = ? AND col = ?"
+    row = db.execute(f"SELECT to_value FROM {target} WHERE {where} AND from_value = ?",
+                     (dataset, table, column, into)).fetchone()
+    into = row[0] if row else into  # into is itself merged away: point at its final value
+    db.executemany(f"UPDATE {target} SET to_value = ? WHERE {where} AND to_value = ?",
+                   [(into, dataset, table, column, v) for v in values if v != into])
+    db.execute(f"DELETE FROM {target} WHERE {where} AND from_value = to_value", (dataset, table, column))
     db.executemany(
         f"INSERT INTO {target} (dataset, tbl, col, from_value, to_value, created_at) VALUES (?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(dataset, tbl, col, from_value) DO UPDATE SET to_value = excluded.to_value, "
