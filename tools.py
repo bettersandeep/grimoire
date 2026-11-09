@@ -222,7 +222,12 @@ def attach(args, session_id=None, **kwargs):
                         "credentials. Copy the file to another folder, or ask the user to set "
                         "plugins.entries.grimoire.settings.allow_private_folders: true.")
         wanted = engine.dataset_name(path_arg, args.get("name"))
-        name, kind = eng.attach(path_arg, args.get("name"), merges=store.merges(db, wanted))
+        real = os.path.realpath(os.path.expanduser(str(path_arg)))
+        current = eng.datasets.get(wanted)
+        if current and current[0] == real and eng.fresh(wanted):
+            name, kind = wanted, current[1]  # already open and unchanged: no rebuild
+        else:
+            name, kind = eng.attach(path_arg, args.get("name"), merges=store.merges(db, wanted))
         path = eng.datasets[name][0]
         store.save_dataset(db, name, path, kind)
         tables = []
@@ -338,6 +343,48 @@ def merge(args, **kwargs):
         return _err(str(exc))
     except Exception as exc:
         return _err(f"merge failed: {exc}")
+
+
+def auto_attach(user_message, session_id=None, cwd=None):
+    """Attach the data files a message names, in plugin code, and return context that lets the model
+    answer with one grimoire_query call (no tool loading, no attach round trip). None when no file is
+    named; the plain hint when a file cannot be attached here."""
+    names = guard.data_file_mentions(user_message)
+    if not names:
+        return None
+    lines = []
+    for name in names:
+        path = os.path.expanduser(name)
+        if not os.path.isabs(path):
+            path = os.path.join(cwd or os.getcwd(), path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            result = json.loads(attach({"path": path}, session_id=session_id))
+        except Exception:
+            continue
+        if "error" in result:
+            continue
+        for t in result["tables"]:
+            cols = t["columns"]
+            shown = ", ".join(cols[:60]) + (f", ... ({len(cols)} columns)" if len(cols) > 60 else "")
+            lines.append(f"- {name} is table {_sql_ref(t['table'])} ({t['rows']:,} rows): {shown}")
+        if result.get("skipped_lines"):
+            lines.append(f"  {result['skipped_lines']['count']} malformed lines were skipped; tell the user.")
+        for rule in result.get("merges", []):
+            lines.append(f"  merge rule: {rule}")
+        db, _eng = _get()
+        for tbl, col, text in store.notes(db, result["dataset"]):
+            lines.append(f"  note on {col}: {text}")
+    if not lines:
+        return guard.data_file_hint(user_message)
+    return (
+        "[Grimoire] Data files are attached:\n" + "\n".join(lines) + "\n"
+        "Answer with one call: tool_call with name \"grimoire_query\" and arguments "
+        "{\"sql\": \"<one DuckDB SELECT>\", \"purpose\": \"<what it answers>\"}. Compute every number you "
+        "will state in that SQL, then cite the query id like [q12]. Do not read the file or parse it with "
+        "code. Use grimoire_profile only if you need to check data quality."
+    )
 
 
 def _datasets_in(sql, datasets):

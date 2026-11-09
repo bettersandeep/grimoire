@@ -44,7 +44,14 @@ def register(ctx):
 
     def before_turn(user_message=None, session_id=None, **kwargs):
         tools.remember_user_message(session_id, user_message)
-        hint = guard.data_file_hint(user_message)
+        try:
+            cwd = ctx.session_cwd()
+        except Exception:
+            cwd = None
+        try:
+            hint = tools.auto_attach(user_message, session_id, cwd)
+        except Exception:
+            hint = guard.data_file_hint(user_message)
         parts = [hint] if hint else []
         if hint or tools.used_grimoire(session_id):
             try:

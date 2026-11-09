@@ -29,6 +29,7 @@ Update with `hermes plugins update grimoire`.
 | | |
 |---|---|
 | Reads files | CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet, SQLite |
+| Answers in one step | When your message names a file, Grimoire opens it before the model starts, so the model answers with one query |
 | Answers with SQL | DuckDB in memory; the model sees schemas and small results, never the rows |
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | After each reply: which numbers trace to query results, which are derived by simple arithmetic, and which have no source |
@@ -62,15 +63,15 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 
 ## Benchmark
 
-Same 8 questions on the same free model, with and without Grimoire, 80 answers ([details](bench/RESULTS.md)):
+Same 8 questions on the same free model, with and without Grimoire ([details](bench/RESULTS.md)):
 
-| | Plain Hermes | With Grimoire |
+| | Plain Hermes | With Grimoire 0.6 |
 |---|---|---|
-| Correct | 39 of 40 | 40 of 40 |
-| Input tokens (median) | 61,051 | 47,619 (22% fewer) |
-| Output tokens (median) | 858 | 378 (56% fewer) |
-| Time per answer | 30 s | 19 s (36% faster) |
-| Cost per answer, at $3/$15 per million | $0.050 | $0.032 (37% cheaper) |
+| API calls per answer | 5 | 2 |
+| Input tokens (median) | 61,051 | 23,300 (62% fewer) |
+| Time per answer | 30 s | 12 s (60% faster) |
+| Cost per answer, at $3/$15 per million | $0.050 | $0.024 (53% cheaper) |
+| Correct | 39 of 40 | 23 of 24; the wrong one (1,091 copied as 10,911) was flagged by the number check |
 
 Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above uses `sales_50k.csv` from it.
 
@@ -79,6 +80,7 @@ Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above 
 - **Files:** only the files the model attaches, read only. Inside DuckDB, all other file access, network access, extension loading and setting changes are off and locked.
 - **Private folders:** files in `~/.hermes`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, `~/.kube`, `~/.docker` and `~/Library` are refused (iCloud Drive and other cloud folders in `~/Library` are allowed). To allow them, set `plugins.entries.grimoire.settings.allow_private_folders: true`.
 - **Your files never change.** Merge rules apply inside Grimoire only.
+- **Opening files before the model starts:** when your message names a data file that exists, Grimoire opens it (read only, same rules as above) and gives the model its table name and columns.
 - **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
 - **Network:** none. Grimoire makes no network calls; your model provider sees what the model sees, as with any Hermes tool.
 - **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (adds a one-line hint when a message names a data file, and the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the number check and, when on, the learning card).
