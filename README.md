@@ -62,6 +62,11 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 | `/grimoire clear history` | Delete all saved queries and results |
 | `/grimoire reset confirm` | Delete everything Grimoire saved |
 
+## Hermes Desktop
+
+Grimoire adds a **Data** page to Hermes Desktop: your files with their data problems, merges waiting for approval, learning toggles, and every saved query with its chart, table, SQL and explanation.
+Like every Desktop plugin it starts off; turn it on under **Capabilities → Plugins**.
+
 ## Tools the model gets
 
 `grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.

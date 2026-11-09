@@ -188,6 +188,16 @@ def _get():
         return _state["db"], _state["engine"]
 
 
+def _sync(db, eng):
+    """Follow changes made outside this process (the Desktop panel): forgotten files and merge rules."""
+    saved = {name for name, _p, _k in store.datasets(db)}
+    for name in list(eng.datasets):
+        if name not in saved:
+            eng.forget(name)
+        elif store.merges(db, name) != eng.merges(name):
+            eng.set_merges(name, store.merges(db, name))
+
+
 def _ok(**data):
     return json.dumps(data, ensure_ascii=False, default=str)
 
@@ -312,6 +322,7 @@ def profile(args, session_id=None, **kwargs):
 def query(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
+        _sync(db, eng)
         sql = args.get("sql", "")
         columns, rows, truncated = eng.query(sql)
         with _lock:

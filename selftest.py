@@ -239,6 +239,14 @@ def test_data_plugin(tmp, db):
     page = Path(path).read_text()
     assert "total per month" in page and "SQL behind these numbers" in page and "<svg" in page, out
     Path(path).unlink()
+    # changes made in the Desktop panel (another process: store only) apply before the next query
+    (tmp / "regions.csv").write_text("region,n\nNorth,1\nnorth ,2\n")
+    call(tools.attach, path=str(tmp / "regions.csv"))
+    store.propose_merge(db, "regions", "regions", "region", ["north "], "North")
+    store.approve_merges(db)
+    assert call(tools.query, sql="SELECT count(DISTINCT region) FROM regions")["rows"] == [[1]]
+    store.forget_dataset(db, "regions")
+    assert "error" in call(tools.query, sql="SELECT * FROM regions")
 
 
 def test_security(tmp, db):
