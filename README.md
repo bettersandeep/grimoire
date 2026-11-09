@@ -36,6 +36,7 @@ In Hermes Desktop:
 1. Open **Bots**, then **New Agent**. Name it Data.
 2. Open **Advanced** and clone from the profile that has Grimoire (usually default).
 3. Under toolsets, keep only **Grimoire** and **Clarifying Questions**.
+   Leave Skills off: it doubles the tokens of every call (measured: 2,214 to 4,532), and Grimoire adds the SQL recipe a question needs by itself.
 4. Ask data questions in the Data bot's chat.
 
 In a terminal: `hermes chat -t grimoire,clarify`.
@@ -123,6 +124,18 @@ Same 8 questions on the same free model, with and without Grimoire ([details](be
 | Correct | 39 of 40 | 23 of 24; the wrong one (1,091 copied as 10,911) was flagged by the number check |
 
 Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above uses `sales_50k.csv` from it.
+
+On real public data, NYC taxi trips January to June 2024 (20.3M rows, 6 Parquet files), with Grimoire 0.19:
+
+| | Plain Hermes | Hermes with Grimoire | Data bot |
+|---|---|---|---|
+| Correct | 6 of 6 | 6 of 6 | 6 of 6 |
+| Input tokens (median) | 123,437 | 23,866 | 5,037 (96% fewer) |
+| Time per answer | 75 s | 12 s | 12 s |
+| Tool calls | 10 | 1 | 1 |
+
+The 2 GB CSV of the same rows gives the same picture ([details](bench/RESULTS.md)).
+Run it with `bench/run.py run --set nyc --sizes parquet,csv --setups plain,grimoire,databot`.
 
 ## What it can access, and what it stores
 
