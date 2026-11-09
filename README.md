@@ -43,7 +43,8 @@ In Hermes Desktop:
 
 1. Open the **Bots** tab, click **+**, then **New bot**. Name it data.
 2. Click **Advanced** (below Description). Under **General**, clone from the profile that has Grimoire (usually default).
-3. Open **Capabilities**, then **Toolsets**. Switch off **All**, then switch on **Grimoire** and **Clarifying Questions**.
+3. Open **Capabilities**, then **Tools**. Scroll down to the **Build for Hermes** box and switch off the switch in it: this switches off all tools.
+   Then type `grimoire` in the search box and switch on **Grimoire**. Do the same for `clarif` (**Clarifying Questions**).
    Leave Skills off: it doubles the tokens of every call (measured: 2,214 to 4,532), and Grimoire adds the SQL recipe a question needs by itself.
 4. Click **Create bot**, then ask data questions in the data bot's chat.
 

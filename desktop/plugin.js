@@ -142,7 +142,7 @@ function LeanTip({ tip, act }) {
       jsxs('ol', { children: [
         jsxs('li', { children: ['Open the ', jsx('b', { children: 'Bots' }), ' tab, click ', jsx('b', { children: '+' }), ', then ', jsx('b', { children: 'New bot' }), '. Name it data.'] }),
         jsxs('li', { children: ['Click ', jsx('b', { children: 'Advanced' }), ' (below Description) and clone from the profile that has Grimoire.'] }),
-        jsxs('li', { children: ['Open ', jsx('b', { children: 'Capabilities' }), ', then ', jsx('b', { children: 'Toolsets' }), '. Switch off ', jsx('b', { children: 'All' }), ', then switch on ', jsx('b', { children: 'Grimoire' }), ' and ', jsx('b', { children: 'Clarifying Questions' }), '.'] }),
+        jsxs('li', { children: ['Open ', jsx('b', { children: 'Capabilities' }), ', then ', jsx('b', { children: 'Tools' }), '. Scroll down to the ', jsx('b', { children: 'Build for Hermes' }), ' box and switch off the switch in it (all tools). Then search for and switch on ', jsx('b', { children: 'Grimoire' }), ' and ', jsx('b', { children: 'Clarifying Questions' }), '.'] }),
         jsx('li', { children: "Click Create bot, then ask data questions in the data bot's chat. Your main agent keeps all its tools." })
       ] })
     ] }),
