@@ -239,6 +239,11 @@ def test_data_plugin(tmp, db):
     path = out.split(": ", 1)[1].split("\n")[0]
     page = Path(path).read_text()
     assert "total per month" in page and "SQL behind these numbers" in page and "<svg" in page, out
+    assert "<polyline" in page  # months get a line chart
+    rep = pkg.report
+    assert rep.is_time(["2026-01", "2026-02", "2026-03"]) and rep.is_time(["2024", "2025", "2026"])
+    assert not rep.is_time(["2026-01", "North", "2026-03"]) and not rep.is_time(["2026-01", "2026-02"])
+    assert [rep.compact(v) for v in (8171280.52, 4085.6, 12, 0)] == ["8.17M", "4.09K", "12", "0"]
     Path(path).unlink()
     # changes made in the Desktop panel (another process: store only) apply before the next query
     (tmp / "regions.csv").write_text("region,n\nNorth,1\nnorth ,2\n")
