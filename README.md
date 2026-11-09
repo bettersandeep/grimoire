@@ -24,6 +24,26 @@ Hermes asks before it installs the one dependency, `duckdb`.
 Needs Hermes 0.23.0 or later and Python 3.11 or later.
 Update with `hermes plugins update grimoire`.
 
+## Fastest setup
+
+Most of the tokens in an answer are Hermes's own system prompt and tool list, sent with every model call (about 11,000 tokens, mostly cached).
+For data work, load only Grimoire's tools:
+
+```sh
+hermes chat -t grimoire
+```
+
+Same question, same free model, measured on 2026-11-09:
+
+| | Hermes default tools | `-t grimoire` |
+|---|---|---|
+| Tokens per answer | about 23,300 | about 4,300 (82% fewer) |
+| Time per answer | 15 to 22 s | about 13 s |
+| Time spent in Grimoire and DuckDB | under 0.3 s | under 0.3 s |
+
+Almost all of the remaining time is the model writing; a faster model answers faster.
+DuckDB runs these queries in 40 to 60 ms.
+
 ## What it does
 
 | | |
