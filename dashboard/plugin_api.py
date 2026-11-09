@@ -76,6 +76,7 @@ def summary():
         "predict": learn and store.get_setting(db, "predict", "off") == "on",
         "predictions": store.get_json(db, "predictions", {"asked": 0, "close": 0}),
         "datasets": datasets, "pending": pending,
+        "metrics": [{"name": n, "expression": e} for n, e in store.metrics(db).items()],
     }
 
 

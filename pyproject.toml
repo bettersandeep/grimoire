@@ -1,6 +1,6 @@
 [project]
 name = "grimoire"
-version = "0.8.0"
+version = "0.9.0"
 description = "A Hermes Agent plugin for learning and exploring data with fewer tokens."
 requires-python = ">=3.11"
 license = "MIT"

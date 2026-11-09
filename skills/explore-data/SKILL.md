@@ -31,6 +31,12 @@ Also when they refer to data they used before.
 - Say which rows you kept: for example "over 48,004 orders that have an amount".
 - If you are not sure what a column means, ask, then save the answer with `grimoire_note`.
 
+## Saved metrics
+
+If the context or `grimoire_catalog` lists saved metrics, use them by name in SQL, like `revenue()`.
+Grimoire replaces the name with the saved definition, so every answer computes it the same way.
+If the user keeps asking for the same calculation, suggest saving it: `/grimoire define <name> = <expression>`.
+
 ## DuckDB recipes
 
 - Share of total: `round(100 * sum(x) / sum(sum(x)) OVER (), 1) AS pct` with `GROUP BY`.

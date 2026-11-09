@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-from . import learning, report, store, tools
+from . import engine, learning, metrics, report, store, tools
 
 HELP = """Commands:
   /grimoire                          status
@@ -19,6 +19,8 @@ HELP = """Commands:
   /grimoire report [dataset]         an HTML report of the last session's queries (or one file's)
   /grimoire learn on | off           learning mode: a short lesson after data answers
   /grimoire learn predict on | off   guess the answer before you see it (needs learning mode)
+  /grimoire define <name> = <expr>   save a metric, e.g. revenue = sum(amount_paise) / 100
+  /grimoire metrics                  saved metrics; /grimoire undefine <name> removes one
   /grimoire rejects [dataset]        malformed lines skipped when a file was read
   /grimoire merges [dataset]         merge rules, applied and waiting for approval
   /grimoire merges approve | reject  apply or drop the merges waiting for approval
@@ -52,6 +54,14 @@ def run(raw_args="", **kwargs):
             return _rerun(db, eng, rest[0])
         if cmd == "report":
             return _report(db, rest[0] if rest else None)
+        if cmd == "define":
+            return _define(db, eng, (raw_args or "").split(None, 1)[1] if len(words) > 1 else "")
+        if cmd == "metrics":
+            saved = store.metrics(db)
+            return "\n".join(f"{n}() = {e}" for n, e in saved.items()) or (
+                "No saved metrics. Example: /grimoire define revenue = sum(amount_paise) / 100")
+        if cmd == "undefine" and len(rest) == 1:
+            return f"Removed {rest[0]}()." if store.drop_metric(db, rest[0].lower().rstrip("()")) else f"No metric {rest[0]}."
         if cmd == "learn":
             return _learn(db, rest)
         if cmd == "rejects":
@@ -121,6 +131,20 @@ def _status(db, eng):
     score = f" ({stats['close']} of {stats['asked']} guesses within 10%)" if predict and stats["asked"] else ""
     lines.append(f"Learning mode: {'on' if learn else 'off'} · Predictions: {'on' if predict else 'off'}{score}")
     return "\n".join(lines + ["", HELP])
+
+
+def _define(db, eng, text):
+    name, sep, expression = text.partition("=")
+    name, expression = name.strip().lower().rstrip("()").strip(), expression.strip()
+    if not sep or not name or not expression:
+        return "Use: /grimoire define <name> = <SQL expression>, for example revenue = sum(amount_paise) / 100"
+    try:
+        works = metrics.validate(eng, name, expression)
+    except engine.EngineError as exc:
+        return f"Not saved: {exc}"
+    store.define_metric(db, name, expression)
+    return (f"Saved {name}() = {expression}. It works on: {', '.join(works)}. "
+            f"Ask in plain words; Grimoire tells the model to use {name}() so every answer computes it the same way.")
 
 
 def _rerun(db, eng, qid):

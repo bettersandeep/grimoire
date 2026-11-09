@@ -47,7 +47,8 @@ QUERY = {
         "Compute every number you will state (totals, averages, growth, shares, differences) in SQL, "
         "so each number in your answer appears in a query result. "
         "Cite the query id next to the numbers it supports, for example 'Revenue grew 14.2% [q7]'. "
-        "Aggregate in SQL; do not fetch raw rows to count or sum them yourself."
+        "Aggregate in SQL; do not fetch raw rows to count or sum them yourself. "
+        "Use saved metrics by name, like revenue(), when the context lists them."
     ),
     "parameters": {
         "type": "object",
