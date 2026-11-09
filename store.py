@@ -59,7 +59,18 @@ def init(db):
     cols = {row[1] for row in db.execute("PRAGMA table_info(queries)")}
     if "datasets" not in cols:  # added in 0.4.1: which datasets a query read, so forget can delete it
         db.execute("ALTER TABLE queries ADD COLUMN datasets TEXT")
+    if "question" not in cols:  # added in 0.5.0: the user's words, for /grimoire explain
+        db.execute("ALTER TABLE queries ADD COLUMN question TEXT")
     db.commit()
+
+
+def get_json(db, key, default=None):
+    value = get_setting(db, key)
+    return default if value is None else json.loads(value)
+
+
+def set_json(db, key, value):
+    set_setting(db, key, json.dumps(value))
 
 
 def get_setting(db, key, default=None):
@@ -84,6 +95,7 @@ def save_dataset(db, name, path, kind):
 
 def forget_dataset(db, name):
     """Delete everything saved about one dataset: profile, notes, merges and the queries that read it."""
+    db.execute("DELETE FROM settings WHERE key = ?", (f"issues:{name}",))
     counts = {}
     for table, where in (("datasets", "name = ?"), ("columns", "dataset = ?"), ("merges", "dataset = ?"),
                          ("pending_merges", "dataset = ?"),
@@ -213,12 +225,12 @@ def merges(db, dataset):
     return out
 
 
-def save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=()):
+def save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=(), question=None):
     cur = db.execute(
-        "INSERT INTO queries (session_id, sql, purpose, columns, rows, truncated, created_at, datasets) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO queries (session_id, sql, purpose, columns, rows, truncated, created_at, datasets, question) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (session_id, sql, purpose, json.dumps(columns), json.dumps(rows), int(truncated), time.time(),
-         ",".join(datasets)),
+         ",".join(datasets), question),
     )
     db.commit()
     return f"q{cur.lastrowid}"
@@ -226,7 +238,8 @@ def save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=
 
 def get_query(db, query_id):
     row = db.execute(
-        "SELECT id, session_id, sql, purpose, columns, rows, truncated, created_at FROM queries WHERE id = ?",
+        "SELECT id, session_id, sql, purpose, columns, rows, truncated, created_at, datasets, question "
+        "FROM queries WHERE id = ?",
         (_number(query_id),),
     ).fetchone()
     if row is None:
@@ -234,6 +247,7 @@ def get_query(db, query_id):
     return {
         "id": f"q{row[0]}", "session_id": row[1], "sql": row[2], "purpose": row[3],
         "columns": json.loads(row[4]), "rows": json.loads(row[5]), "truncated": bool(row[6]), "created_at": row[7],
+        "datasets": [d for d in (row[8] or "").split(",") if d], "question": row[9],
     }
 
 

@@ -10,8 +10,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 pkg = importlib.import_module(HERE.name)
-commands, engine, guard, schemas, store, tools, verify = (
-    pkg.commands, pkg.engine, pkg.guard, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
+commands, engine, guard, learning, schemas, store, tools, verify = (
+    pkg.commands, pkg.engine, pkg.guard, pkg.learning, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
 
 
 # A real reply from a Hermes session (2026-11-08) with the results it was based on.
@@ -123,6 +123,51 @@ def test_data_quality(tmp, db):
     assert "cannot be undone" in commands.run("reset")
     assert "Deleted everything" in commands.run("reset confirm")
     assert store.datasets(db) == [] and "error" in call(tools.query, sql="SELECT count(*) FROM sales")
+
+
+def test_learning(tmp, db):
+    tools.setup(db=db, eng=None)
+    csv = tmp / "orders.csv"
+    csv.write_text("region,amount\nNorth,100\nnorth ,50\nSouth,250\nSouth,\n")
+    call(tools.attach, path=str(csv))
+    call(tools.profile, dataset="orders")
+    # off by default: no card, status says off
+    assert "Learning mode: off" in commands.run("")
+    tools.remember_user_message("test", "What is the total amount per region, highest first?")
+    r = call(tools.query, sql="SELECT region, sum(amount) AS total FROM orders GROUP BY region ORDER BY total DESC",
+             purpose="total per region")
+    qid = r["id"]
+    reply = f"South leads with 250 [{qid}], then North 100."
+    assert "Learning mode" not in tools.check_reply(reply, "test")
+    # explain: the user's words next to the SQL parts
+    text = commands.run(f"explain {qid}")
+    assert "Your question: What is the total amount per region" in text, text
+    assert '"total' in text and "sum(amount)" in text, text
+    assert '"per' in text and "GROUP BY region" in text, text
+    assert '"highest' in text and "ORDER BY total DESC" in text, text
+    # learning on: a card with one idea and one better question from the profile issues
+    assert "Predictions are on" not in commands.run("learn predict on")  # needs learning first
+    assert "on" in commands.run("learn on")
+    out = tools.check_reply(reply, "test")
+    assert "Learning mode" in out and "Learn:" in out and f"/grimoire explain {qid}" in out, out
+    assert "Ask next:" in out and "'North'" in out, out
+    out2 = tools.check_reply(reply, "test")
+    assert out2.split("Learn:")[1][:40] != out.split("Learn:")[1][:40], "the next card teaches a new idea"
+    # predictions: the clarify answer is scored against the main number of the reply
+    assert "Predictions are on" in commands.run("learn predict on")
+    assert "Prediction mode is on" in learning.PREDICT_CONTEXT
+    tools.record_guess("test", json.dumps({"responses": [{"status": "answered", "user_response": "240"}]}))
+    out = tools.check_reply(reply, "test")
+    assert "Your guess: 240. Answer: 250. Close by 4%." in out and "1 of 1" in out, out
+    tools.record_guess("test", json.dumps({"responses": [{"user_response": "about 500"}]}))
+    out = tools.check_reply(reply, "test")
+    assert "Off by 100%" in out and "1 of 2" in out, out
+    assert "Predictions: on (1 of 2 guesses within 10%)" in commands.run("")
+    commands.run("learn off")
+    assert "Learning mode" not in tools.check_reply(reply, "test")
+    # clause splitter keeps subqueries and strings whole
+    parts = learning.clauses("SELECT a FROM (SELECT * FROM t WHERE x = 'GROUP BY') s WHERE b > 1 ORDER BY a LIMIT 5")
+    assert [p[0] for p in parts] == ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"], parts
 
 
 def test_security(tmp, db):
@@ -263,6 +308,7 @@ def main():
 
     test_data_quality(tmp, db)
     test_security(tmp, db)
+    test_learning(tmp, db)
     print("selftest passed")
 
 
