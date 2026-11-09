@@ -40,6 +40,11 @@ def extract(text):
         unit = suffix.group(1).lower() if suffix else ""
         if not suffix and re.match(r"[A-Za-z_\d]", after[:1]):
             continue  # part of a word or id, like 4xx, 2nd, x86
+        before = text[max(0, m.start() - 2):m.start()]
+        if re.fullmatch(r"\w-", before) or re.match(r"\.[A-Za-z]", after):
+            continue  # part of a name, like yellow_2024-05.parquet or v-2
+        if len(core) > 1 and core[0] == "0" and core[1].isdigit():
+            continue  # a zero-padded code, like the month 06
         number = float(core.replace(",", ""))
         decimals = len(core.split(".", 1)[1]) if "." in core else 0
         plain_int = decimals == 0 and "," not in core and not unit

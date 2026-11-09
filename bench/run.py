@@ -25,10 +25,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
-from questions import QUESTIONS, MONTHS, truth  # noqa: E402
+import nyc  # noqa: E402
+import questions  # noqa: E402
+from questions import MONTHS  # noqa: E402
 import verify  # noqa: E402  (pure module, no Hermes or DuckDB imports)
 
-PROFILES = {"plain": "gbplain", "grimoire": "gbgrim"}
+PROFILES = {"plain": "gbplain", "grimoire": "gbgrim", "databot": "gbdata"}  # databot: Grimoire's tools only
 # Option (a): free models cost $0, so tokens are priced at a typical paid list price, per million tokens.
 PRICE_IN, PRICE_CACHE, PRICE_OUT = 3.00, 0.30, 15.00
 TIMEOUT_S = 480
@@ -78,11 +80,13 @@ def run(args):
         for line in out.read_text().splitlines():
             r = json.loads(line)
             done.add((r["size"], r["setup"], r["q"], r["rep"]))
+    qs = nyc if args.set == "nyc" else questions
     for size in args.sizes.split(","):
-        path = Path(args.data).expanduser() / f"sales_{size}.csv"
-        answers = truth(path)
+        name = nyc.FILES[size] if args.set == "nyc" else f"sales_{size}.csv"
+        path = Path(args.data).expanduser() / name
+        answers = qs.truth(path)
         for rep in range(args.repeats):
-            for key, template in QUESTIONS:
+            for key, template in qs.QUESTIONS:
                 for setup in args.setups.split(","):
                     if (size, setup, key, rep) in done:
                         continue
@@ -92,7 +96,7 @@ def run(args):
                     start = time.time()
                     try:
                         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S,
-                                              cwd=path.parent)
+                                              cwd=Path(args.data).expanduser())
                         output, errors = proc.stdout, proc.stderr
                         status = "ok" if proc.returncode == 0 else f"exit {proc.returncode}"
                     except subprocess.TimeoutExpired as exc:
@@ -119,18 +123,19 @@ def report(args):
           "Cost per answer* | Tool calls |")
     print("|---|---|---|---|---|---|---|---|---|")
     for size in dict.fromkeys(r["size"] for r in rows):
-        for setup in ("plain", "grimoire"):
+        for setup in PROFILES:
             rs = [r for r in rows if r["size"] == size and r["setup"] == setup]
             if not rs:
                 continue
             cost = [((r.get("input_tokens") or 0) * PRICE_IN + (r.get("cache_read_tokens") or 0) * PRICE_CACHE
                      + (r.get("output_tokens") or 0) * PRICE_OUT) / 1e6 for r in rs]
             correct = sum(r["score"] == 1.0 for r in rs)
-            print(f"| {size} rows | {setup} | {len(rs)} | {correct}/{len(rs)} ({100 * correct / len(rs):.0f}%) | "
+            label = size if size in nyc.FILES else f"{size} rows"
+            print(f"| {label} | {setup} | {len(rs)} | {correct}/{len(rs)} ({100 * correct / len(rs):.0f}%) | "
                   f"{med([(r.get('input_tokens') or 0) + (r.get('cache_read_tokens') or 0) for r in rs]):,.0f} | "
                   f"{med([r.get('output_tokens') or 0 for r in rs]):,.0f} | {med([r['seconds'] for r in rs]):.0f} s | "
                   f"${med(cost):.4f} | {med([r.get('tool_calls') or 0 for r in rs]):.0f} |")
-    print(f"\nInput tokens include cached input. *Free model, so tokens are priced per million at ${PRICE_IN:.2f} "
+    print(f"\nRows are files: a sales size or a NYC taxi file. Input tokens include cached input. *Free model, so tokens are priced per million at ${PRICE_IN:.2f} "
           f"input, ${PRICE_CACHE:.2f} cached input and ${PRICE_OUT:.2f} output.")
 
 
@@ -143,5 +148,6 @@ if __name__ == "__main__":
     p.add_argument("--setups", default="plain,grimoire")
     p.add_argument("--repeats", type=int, default=1)
     p.add_argument("--model", default="meituan/longcat-2.5:free")
+    p.add_argument("--set", choices=["sales", "nyc"], default="sales", help="nyc: sizes are parquet,csv")
     a = p.parse_args()
     run(a) if a.action == "run" else report(a)

@@ -306,6 +306,11 @@ def attach(args, session_id=None, **kwargs):
             tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
         remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
         result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
+        if engine.is_many(path):
+            n_files = len(engine.files_of(path))
+            result["files"] = n_files
+            result["files_note"] = "One table over all files; the filename column says which file a row came from."
+            remember(session_id, [n_files])
         skipped, first = eng.rejects(name)
         if skipped:
             result["skipped_lines"] = {
@@ -577,6 +582,8 @@ def auto_attach(user_message, session_id=None, cwd=None):
             cols = t["columns"]
             shown = ", ".join(cols[:60]) + (f", ... ({len(cols)} columns)" if len(cols) > 60 else "")
             lines.append(f"- {name} is table {_sql_ref(t['table'])} ({t['rows']:,} rows): {shown}")
+        if result.get("files"):
+            lines.append(f"  {result['files']} files in one table; the filename column says which file a row came from.")
         if result.get("skipped_lines"):
             lines.append(f"  {result['skipped_lines']['count']} malformed lines were skipped; tell the user.")
         for rule in result.get("merges", []):
