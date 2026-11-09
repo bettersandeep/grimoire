@@ -15,11 +15,16 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from pathlib import Path
 
 MAX_ROWS = 200
-TIMEOUT_S = 15
+TIMEOUT_S = 30          # one model query
+SETUP_TIMEOUT_S = 120   # opening, scanning or profiling a file
+SAMPLE_ROWS = 1_000_000  # profile issue checks read a sample of bigger tables
+# ponytail: SQLite tables are copied into memory; stream them if large SQLite files matter.
+MAX_SQLITE_BYTES = 2 * 1024**3
 
 KINDS = {
     ".csv": "csv", ".tsv": "csv", ".txt": "csv",
@@ -30,9 +35,6 @@ KINDS = {
 COMPRESSED = (".gz", ".zst")  # DuckDB reads these CSV and JSON files directly
 READERS = {"csv": "read_csv", "json": "read_json_auto", "parquet": "read_parquet"}
 MAX_REJECTS = 20
-_READ_ONLY = re.compile(
-    r"^\s*\(*\s*(select|with|from|describe|summarize|show|pivot|unpivot|values|table)\b", re.I
-)
 
 
 class EngineError(Exception):
@@ -96,6 +98,14 @@ def kind_of(path):
 def dataset_name(path, name=None):
     base = Path(str(path)).name.split(".", 1)[0]
     return safe_name(name or base)
+
+
+def _memory_limit():
+    """Half of physical memory, so one query cannot take the whole machine."""
+    try:
+        return f"{os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') // 2 // 1024**2}MiB"
+    except (AttributeError, ValueError, OSError):
+        return "4GiB"
 
 
 class Engine:
@@ -192,7 +202,9 @@ class Engine:
         con = _duckdb().connect(":memory:", config={
             "autoinstall_known_extensions": False,
             "autoload_known_extensions": False,
+            "memory_limit": _memory_limit(),
         })
+        con.execute("SET enable_progress_bar = false")
         tables, readable = {}, []
         for dataset, (path, kind) in self._sources.items():
             merges = self._merges.get(dataset) or {}
@@ -207,7 +219,7 @@ class Engine:
                 source += ", ignore_errors = true"
                 key = _file_key(path)
                 if key not in self._rejects:
-                    self._rejects[key] = _scan_rejects(con, path)
+                    self._rejects[key] = _with_timeout(con, SETUP_TIMEOUT_S, _scan_rejects, con, path)
             source += ")"
             own = merges_for(merges, dataset)
             if own:
@@ -223,26 +235,32 @@ class Engine:
         if old is not None:
             old.close()
 
-    def query(self, sql):
+    def query(self, sql, timeout=TIMEOUT_S):
         """Run one read statement. Returns (columns, rows, truncated)."""
-        sql = sql.strip().rstrip(";").strip()
-        if not _READ_ONLY.match(sql):
-            raise EngineError("Only read queries are allowed (SELECT, WITH, FROM, DESCRIBE, SUMMARIZE, SHOW).")
-        if ";" in sql:
-            # ponytail: also rejects ';' inside string literals; use a parser if that ever matters.
-            raise EngineError("Send one statement at a time.")
         duckdb = _duckdb()
         with self._lock:
             if self._con is None:
                 raise EngineError("No dataset is attached yet.")
-            timer = threading.Timer(TIMEOUT_S, self._con.interrupt)
+            # DuckDB's own parser decides: exactly one statement, and it must be a SELECT
+            # (this covers WITH, FROM, DESCRIBE, SUMMARIZE, SHOW, VALUES and TABLE, and
+            # rejects WITH ... INSERT/UPDATE/DELETE, which start like a read).
+            try:
+                statements = self._con.extract_statements(sql)
+            except duckdb.Error as exc:
+                raise EngineError(str(exc).splitlines()[0]) from exc
+            if len(statements) != 1:
+                raise EngineError("Send exactly one statement.")
+            if statements[0].type != duckdb.StatementType.SELECT:
+                raise EngineError("Only read queries are allowed (SELECT, WITH, FROM, DESCRIBE, SUMMARIZE, SHOW).")
+            timer = threading.Timer(timeout, self._con.interrupt)
             timer.start()
             try:
                 cursor = self._con.execute(sql)
                 columns = [d[0] for d in cursor.description or []]
                 rows = cursor.fetchmany(MAX_ROWS + 1)
             except duckdb.InterruptException as exc:
-                raise EngineError(f"Query took longer than {TIMEOUT_S} s and was stopped.") from exc
+                raise EngineError(f"Query took longer than {timeout} s and was stopped. "
+                                  "Aggregate more, or filter to fewer rows.") from exc
             except duckdb.Error as exc:
                 raise EngineError(str(exc).splitlines()[0]) from exc
             finally:
@@ -252,15 +270,23 @@ class Engine:
         return columns, rows, truncated
 
     def row_count(self, table):
-        return self.query(f"SELECT count(*) FROM {table}")[1][0][0]
+        return self.query(f"SELECT count(*) FROM {table}", SETUP_TIMEOUT_S)[1][0][0]
 
     def schema(self, table):
         _, rows, _ = self.query(f"DESCRIBE {table}")
         return [(r[0], r[1]) for r in rows]
 
     def profile(self, table):
-        columns, rows, _ = self.query(f"SUMMARIZE {table}")
-        return [dict(zip(columns, row)) for row in rows]
+        """(SUMMARIZE rows as dicts, the table they describe). Tables over SAMPLE_ROWS are profiled
+        on a repeatable random sample, so the second value is then "grimoire_sample"."""
+        if self.row_count(table) > SAMPLE_ROWS:
+            with self._lock:  # one scan of the big table; every later check reads the sample
+                _with_timeout(self._con, SETUP_TIMEOUT_S, self._con.execute,
+                              f"CREATE OR REPLACE TEMP TABLE grimoire_sample AS SELECT * FROM {table} "
+                              f"USING SAMPLE {SAMPLE_ROWS} ROWS (reservoir, 7)")
+            table = "grimoire_sample"
+        columns, rows, _ = self.query(f"SUMMARIZE {table}", SETUP_TIMEOUT_S)
+        return [dict(zip(columns, row)) for row in rows], table
 
     def issues(self, table, profile_rows):
         """Data problems worth asking the user about, as short dicts. Reads only aggregates."""
@@ -298,6 +324,15 @@ class Engine:
 def _file_key(path):
     st = os.stat(path)
     return path, st.st_mtime_ns, st.st_size
+
+
+def _with_timeout(con, seconds, fn, *args):
+    timer = threading.Timer(seconds, con.interrupt)
+    timer.start()
+    try:
+        return fn(*args)
+    finally:
+        timer.cancel()
 
 
 def _scan_rejects(con, path):
@@ -347,8 +382,12 @@ def _merge_in_place(con, ref, merges):
 
 def _copy_sqlite(con, dataset, path):
     """Copy SQLite tables into DuckDB with the stdlib reader (DuckDB's sqlite extension needs a download)."""
-    # ponytail: copies every row into memory; fine for local databases up to a few million rows.
+    if os.path.getsize(path) > MAX_SQLITE_BYTES:
+        raise EngineError(f"This SQLite file is over {MAX_SQLITE_BYTES // 1024**3} GB. "
+                          "Export the tables you need to Parquet or CSV and attach those.")
     src = sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)
+    deadline = time.monotonic() + SETUP_TIMEOUT_S
+    src.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)  # nonzero stops a slow view
     try:
         names = [r[0] for r in src.execute(
             "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name"

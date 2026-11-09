@@ -22,6 +22,25 @@ def data_file_hint(user_message):
     )
 
 
+# Folders that hold credentials, app databases and Hermes's own state. Grimoire does not open files there
+# unless the user sets plugins.entries.grimoire.settings.allow_private_folders: true.
+_PRIVATE = (".hermes", ".ssh", ".gnupg", ".aws", ".config", ".kube", ".docker", "Library")
+_PRIVATE_OK = ("Library/Mobile Documents", "Library/CloudStorage")  # iCloud Drive, Dropbox and similar
+
+
+def private_folder(real_path, home=None):
+    """The private folder that holds real_path, or None."""
+    home = os.path.realpath(home or os.path.expanduser("~"))
+    try:
+        rel = Path(os.path.realpath(real_path)).relative_to(home)
+    except ValueError:
+        return None
+    text = rel.as_posix()
+    if any(text == ok or text.startswith(ok + "/") for ok in _PRIVATE_OK):
+        return None
+    return rel.parts[0] if rel.parts and rel.parts[0] in _PRIVATE else None
+
+
 def check(tool_name, args, cwd=None, limit_kb=DEFAULT_LIMIT_KB):
     """Return a pre_tool_call block directive, or None to let the call run."""
     if tool_name != "read_file" or not limit_kb:

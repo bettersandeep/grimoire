@@ -25,6 +25,8 @@ def register(ctx):
     ctx.register_command("grimoire", commands.run, description="Grimoire status, query SQL, skipped lines and merges",
                          args_hint="[sql q12 | rejects | merges | unmerge <dataset> <column>]")
 
+    tools.configure(allow_private_folders=ctx.get_config("allow_private_folders", default=False))
+
     # Users can change the size limit, or set 0 to turn the guard off:
     # plugins.entries.grimoire.settings.read_guard_kb in config.yaml
     limit_kb = ctx.get_config("read_guard_kb", default=guard.DEFAULT_LIMIT_KB)

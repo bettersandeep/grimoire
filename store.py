@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS merges (
     created_at REAL NOT NULL,
     PRIMARY KEY (dataset, tbl, col, from_value)
 );
+CREATE TABLE IF NOT EXISTS pending_merges (
+    dataset    TEXT NOT NULL,
+    tbl        TEXT NOT NULL,
+    col        TEXT NOT NULL,
+    from_value TEXT NOT NULL,
+    to_value   TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (dataset, tbl, col, from_value)
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS queries (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT,
@@ -43,6 +56,20 @@ CREATE TABLE IF NOT EXISTS queries (
 
 def init(db):
     db.executescript(SCHEMA)
+    cols = {row[1] for row in db.execute("PRAGMA table_info(queries)")}
+    if "datasets" not in cols:  # added in 0.4.1: which datasets a query read, so forget can delete it
+        db.execute("ALTER TABLE queries ADD COLUMN datasets TEXT")
+    db.commit()
+
+
+def get_setting(db, key, default=None):
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_setting(db, key, value):
+    db.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+               (key, str(value)))
     db.commit()
 
 
@@ -56,9 +83,26 @@ def save_dataset(db, name, path, kind):
 
 
 def forget_dataset(db, name):
-    db.execute("DELETE FROM datasets WHERE name = ?", (name,))
-    db.execute("DELETE FROM columns WHERE dataset = ?", (name,))
-    db.execute("DELETE FROM merges WHERE dataset = ?", (name,))
+    """Delete everything saved about one dataset: profile, notes, merges and the queries that read it."""
+    counts = {}
+    for table, where in (("datasets", "name = ?"), ("columns", "dataset = ?"), ("merges", "dataset = ?"),
+                         ("pending_merges", "dataset = ?"),
+                         ("queries", "instr(',' || coalesce(datasets, '') || ',', ',' || ? || ',') > 0")):
+        counts[table] = db.execute(f"DELETE FROM {table} WHERE {where}", (name,)).rowcount
+    db.commit()
+    return counts
+
+
+def clear_history(db):
+    n = db.execute("DELETE FROM queries").rowcount
+    db.commit()
+    return n
+
+
+def reset(db):
+    for table in ("datasets", "columns", "merges", "pending_merges", "queries", "settings"):
+        db.execute(f"DELETE FROM {table}")
+    db.execute("DELETE FROM sqlite_sequence WHERE name = 'queries'")
     db.commit()
 
 
@@ -97,11 +141,45 @@ def notes(db, dataset):
     ).fetchall()
 
 
+def propose_merge(db, dataset, table, column, values, into):
+    """Save a merge the model proposed. It applies only after the user approves it."""
+    _upsert_merge(db, "pending_merges", dataset, table, column, values, into)
+
+
+def pending_merges(db, dataset=None):
+    """[(dataset, table, column, from_value, to_value)], oldest first."""
+    sql = "SELECT dataset, tbl, col, from_value, to_value FROM pending_merges"
+    args = ()
+    if dataset:
+        sql, args = sql + " WHERE dataset = ?", (dataset,)
+    return db.execute(sql + " ORDER BY created_at", args).fetchall()
+
+
+def approve_merges(db):
+    """Move every pending merge into the active rules. Returns the datasets that changed."""
+    rows = pending_merges(db)
+    for dataset, tbl, col, a, b in rows:
+        save_merge(db, dataset, tbl, col, [a], b)
+    db.execute("DELETE FROM pending_merges")
+    db.commit()
+    return sorted({r[0] for r in rows})
+
+
+def reject_merges(db):
+    n = db.execute("DELETE FROM pending_merges").rowcount
+    db.commit()
+    return n
+
+
 def save_merge(db, dataset, table, column, values, into):
     """Map each of values to into in dataset.table.column. A value merged before is re-pointed."""
+    _upsert_merge(db, "merges", dataset, table, column, values, into)
+
+
+def _upsert_merge(db, target, dataset, table, column, values, into):
     now = time.time()
     db.executemany(
-        "INSERT INTO merges (dataset, tbl, col, from_value, to_value, created_at) VALUES (?, ?, ?, ?, ?, ?) "
+        f"INSERT INTO {target} (dataset, tbl, col, from_value, to_value, created_at) VALUES (?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(dataset, tbl, col, from_value) DO UPDATE SET to_value = excluded.to_value, "
         "created_at = excluded.created_at",
         [(dataset, table, column, v, into, now) for v in values if v != into],
@@ -109,8 +187,12 @@ def save_merge(db, dataset, table, column, values, into):
     db.commit()
 
 
-def delete_merges(db, dataset, column):
-    """column may be 'col' or 'table.col'. Returns the number of rules removed."""
+def delete_merges(db, dataset, column=None):
+    """column may be None (all columns), 'col' or 'table.col'. Returns the number of rules removed."""
+    if not column:
+        cur = db.execute("DELETE FROM merges WHERE dataset = ?", (dataset,))
+        db.commit()
+        return cur.rowcount
     table, _, col = column.rpartition(".")
     sql, args = "DELETE FROM merges WHERE dataset = ? AND col = ?", [dataset, col]
     if table:
@@ -131,10 +213,12 @@ def merges(db, dataset):
     return out
 
 
-def save_query(db, session_id, sql, purpose, columns, rows, truncated):
+def save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=()):
     cur = db.execute(
-        "INSERT INTO queries (session_id, sql, purpose, columns, rows, truncated, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (session_id, sql, purpose, json.dumps(columns), json.dumps(rows), int(truncated), time.time()),
+        "INSERT INTO queries (session_id, sql, purpose, columns, rows, truncated, created_at, datasets) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id, sql, purpose, json.dumps(columns), json.dumps(rows), int(truncated), time.time(),
+         ",".join(datasets)),
     )
     db.commit()
     return f"q{cur.lastrowid}"

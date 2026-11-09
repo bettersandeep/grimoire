@@ -6,11 +6,15 @@ from pathlib import Path
 from . import store, tools
 
 HELP = """Commands:
-  /grimoire                         status
-  /grimoire sql q12                 the SQL and result behind a query id
-  /grimoire rejects [dataset]       malformed lines skipped when a file was read
-  /grimoire merges [dataset]        saved merge rules
-  /grimoire unmerge <dataset> <column>   remove the merge rules of a column"""
+  /grimoire                          status
+  /grimoire sql q12                  the SQL and result behind a query id
+  /grimoire rejects [dataset]        malformed lines skipped when a file was read
+  /grimoire merges [dataset]         merge rules, applied and waiting for approval
+  /grimoire merges approve | reject  apply or drop the merges waiting for approval
+  /grimoire unmerge <dataset> [column]   remove merge rules (one column, or all)
+  /grimoire forget <dataset>         delete everything saved about one file
+  /grimoire clear history            delete all saved queries and results
+  /grimoire reset confirm            delete everything Grimoire saved"""
 
 
 def version():
@@ -30,15 +34,51 @@ def run(raw_args="", **kwargs):
             return _sql(db, rest[0])
         if cmd == "rejects":
             return _rejects(eng, rest[0] if rest else None)
+        if cmd == "merges" and rest[:1] == ["approve"]:
+            changed = store.approve_merges(db)
+            for name in changed:
+                if name in eng.datasets:
+                    eng.set_merges(name, store.merges(db, name))
+            return (f"Applied. Later queries on {', '.join(changed)} use the merged values. "
+                    "The files did not change.") if changed else "No merges are waiting for approval."
+        if cmd == "merges" and rest[:1] == ["reject"]:
+            n = store.reject_merges(db)
+            return f"Dropped {n} proposed merge(s)." if n else "No merges are waiting for approval."
         if cmd == "merges":
             return _merges(db, rest[0] if rest else None)
-        if cmd == "unmerge" and len(rest) == 2:
-            removed = store.delete_merges(db, rest[0], rest[1])
+        if cmd == "unmerge" and rest and len(rest) <= 2:
+            dataset, column = rest[0], (rest[1] if len(rest) == 2 else None)
+            removed = store.delete_merges(db, dataset, column)
+            where = f"{dataset}.{column}" if column else dataset
             if not removed:
-                return f"No merge rules for {rest[1]} in {rest[0]}."
+                return f"No merge rules for {where}."
+            if dataset in eng.datasets:
+                eng.set_merges(dataset, store.merges(db, dataset))
+            return f"Removed {removed} merge rule(s) from {where}. Later queries use the original values."
+        if cmd == "forget" and len(rest) == 1:
+            counts = store.forget_dataset(db, rest[0])
             if rest[0] in eng.datasets:
-                eng.set_merges(rest[0], store.merges(db, rest[0]))
-            return f"Removed {removed} merge rule(s) from {rest[0]}.{rest[1]}. Later queries use the original values."
+                eng.forget(rest[0])
+            if not any(counts.values()):
+                return f"Nothing saved for {rest[0]}."
+            tools.forget_values()
+            return (f"Deleted {rest[0]}: {counts['columns']} column profile(s) and notes, "
+                    f"{counts['merges'] + counts['pending_merges']} merge rule(s), {counts['queries']} saved "
+                    "query(ies). The file did not change. Hermes chat history keeps its own copy of past "
+                    "results; delete those sessions in Hermes to remove it.")
+        if cmd == "clear" and rest == ["history"]:
+            n = store.clear_history(db)
+            tools.forget_values()
+            return f"Deleted {n} saved query(ies) and their results. Files, notes and merges stay."
+        if cmd == "reset":
+            if rest != ["confirm"]:
+                return ("This deletes every saved file entry, column note, merge rule and query, and cannot "
+                        "be undone. Type /grimoire reset confirm to do it.")
+            store.reset(db)
+            for name in list(eng.datasets):
+                eng.forget(name)
+            tools.forget_values()
+            return "Deleted everything Grimoire saved. Your files did not change."
         return f"Unknown command: /grimoire {raw_args}\n{HELP}"
     except Exception as exc:  # a command must never crash the chat
         return f"/grimoire failed: {exc}"
@@ -54,7 +94,7 @@ def _status(db, eng):
             lines.append(f"  {name}  {kind}  {path}{state}")
     else:
         lines.append("Data files: none yet. Ask a question about a CSV, JSON, Parquet or SQLite file.")
-    lines.append("Learning mode: not available yet")
+    lines.append("Learning mode: coming soon")
     return "\n".join(lines + ["", HELP])
 
 
@@ -89,6 +129,10 @@ def _merges(db, dataset):
     for name in names:
         lines = tools._merge_lines(store.merges(db, name))
         if lines:
-            out.append(f"{name}:")
+            out.append(f"{name} (applied):")
             out += [f"  {line}" for line in lines]
+    pending = store.pending_merges(db, dataset)
+    if pending:
+        out.append("Waiting for approval (/grimoire merges approve or reject):")
+        out += [f"  {d}.{c}: {a!r} -> {b!r}" for d, _t, c, a, b in pending]
     return "\n".join(out) or "No merge rules saved."
