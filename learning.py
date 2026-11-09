@@ -141,6 +141,10 @@ def concept(sql, seen=()):
 def better_question(issues):
     """One question the data raises, from saved profile issues, or None."""
     for issue in issues or []:
+        if issue.get("issue") == "duplicate rows":
+            return (f"{issue['rows']:,} rows are exact copies of other rows. Are they real repeat orders, "
+                    "or should each count once?")
+    for issue in issues or []:
         if issue.get("issue") == "spelling variants of one value":
             vs = issue["variants"]
             names = " and ".join(f"'{v['value']}'" for v in vs[:3])

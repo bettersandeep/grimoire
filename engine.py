@@ -10,6 +10,7 @@ Safety model:
 
 import datetime
 import decimal
+import glob
 import math
 import os
 import re
@@ -35,6 +36,7 @@ KINDS = {
 COMPRESSED = (".gz", ".zst")  # DuckDB reads these CSV and JSON files directly
 READERS = {"csv": "read_csv", "json": "read_json_auto", "parquet": "read_parquet"}
 MAX_REJECTS = 20
+MAX_FILES = 500  # files in one folder or pattern dataset
 
 
 class EngineError(Exception):
@@ -95,8 +97,31 @@ def kind_of(path):
     return KINDS.get(suffixes[-1]) if suffixes else None
 
 
+def is_many(path):
+    """True for a folder or a glob pattern (several files read as one table)."""
+    return os.path.isdir(path) or any(ch in str(path) for ch in "*?[")
+
+
+def files_of(path):
+    """The data files behind a path: itself, the data files in a folder, or a glob's matches."""
+    if os.path.isdir(path):
+        found = [os.path.join(path, n) for n in sorted(os.listdir(path)) if kind_of(n)]
+    elif is_many(path):
+        found = sorted(glob.glob(path))
+    else:
+        return [path]
+    return [os.path.realpath(f) for f in found if os.path.isfile(f)][:MAX_FILES]
+
+
 def dataset_name(path, name=None):
-    base = Path(str(path)).name.split(".", 1)[0]
+    text = str(path).rstrip("/")
+    if os.path.isdir(text):
+        base = Path(text).name
+    elif is_many(text):
+        stem = re.split(r"[*?\[]", Path(text).name, 1)[0].split(".", 1)[0].rstrip("_-")
+        base = stem or Path(text).parent.name
+    else:
+        base = Path(text).name.split(".", 1)[0]
     return safe_name(name or base)
 
 
@@ -130,7 +155,10 @@ class Engine:
 
     def attach(self, path, name=None, merges=None):
         """merges: {(table, column): {from_value: to_value}} applied to every query of this dataset."""
-        real = os.path.realpath(os.path.expanduser(str(path)))
+        expanded = os.path.expanduser(str(path))
+        if is_many(expanded):
+            return self._attach_many(expanded, name, merges)
+        real = os.path.realpath(expanded)
         try:
             os.stat(real)
         except PermissionError as exc:
@@ -150,7 +178,22 @@ class Engine:
                 f"Unsupported file type '{''.join(Path(real).suffixes)}'. "
                 "Use CSV, TSV, JSON, NDJSON (also .gz or .zst), Parquet or SQLite."
             )
-        dataset = dataset_name(real, name)
+        return self._add(real, kind, dataset_name(real, name), merges, path)
+
+    def _attach_many(self, pattern, name, merges):
+        real = os.path.realpath(pattern)
+        try:
+            files = files_of(real)
+        except PermissionError as exc:
+            raise EngineError(f"macOS or your system blocked access to {pattern}.") from exc
+        if not files:
+            raise EngineError(f"No data files match {pattern}.")
+        kinds = {kind_of(f) for f in files}
+        if len(kinds) != 1 or None in kinds or "sqlite" in kinds:
+            raise EngineError("A folder or pattern must hold files of one kind: all CSV, all JSON or all Parquet.")
+        return self._add(real, kinds.pop(), dataset_name(pattern, name), merges, pattern)
+
+    def _add(self, real, kind, dataset, merges, shown):
         with self._lock:
             previous = self._sources.get(dataset), self._merges.get(dataset)
             self._sources[dataset] = (real, kind)
@@ -164,7 +207,7 @@ class Engine:
                 else:
                     self._sources[dataset], self._merges[dataset] = previous
                 self._rebuild()
-                raise EngineError(f"Cannot read {path}: {exc}") from exc
+                raise EngineError(f"Cannot read {shown}: {exc}") from exc
         return dataset, kind
 
     def fresh(self, dataset):
@@ -200,7 +243,7 @@ class Engine:
         return dict(self._merges.get(dataset) or {})
 
     def rejects(self, dataset):
-        """(count, [(line, error, text)]) for rows the CSV reader skipped; (0, []) for other kinds."""
+        """(count, [(where, error, text)]) for rows the CSV reader skipped; (0, []) for other kinds."""
         path, kind = self._sources.get(dataset, (None, None))
         if kind != "csv":
             return 0, []
@@ -222,13 +265,17 @@ class Engine:
                 for ref in tables[dataset]:
                     _merge_in_place(con, ref, merges)
                 continue
-            source = f"{READERS[kind]}({literal(path)}"
+            files = files_of(path)
+            target = _list_literal(files) if is_many(path) else literal(path)
+            source = f"{READERS[kind]}({target}"
+            if is_many(path):
+                source += ", union_by_name = true, filename = true"  # a filename column says which file
             if kind == "csv":
                 # Skip malformed lines instead of guessing one text column; the skipped lines are reported.
                 source += ", ignore_errors = true"
                 key = _file_key(path)
                 if key not in self._rejects:
-                    self._rejects[key] = _with_timeout(con, SETUP_TIMEOUT_S, _scan_rejects, con, path)
+                    self._rejects[key] = _with_timeout(con, SETUP_TIMEOUT_S, _scan_files, con, files, is_many(path))
             source += ")"
             own = merges_for(merges, dataset)
             if own:
@@ -236,7 +283,7 @@ class Engine:
             con.execute(f"CREATE VIEW {ident(dataset)} AS {_merged_select(con, source, own)}")
             con.execute(f"SELECT * FROM {ident(dataset)} LIMIT 0")  # fail now on a bad file
             tables[dataset] = [dataset]
-            readable.append(path)
+            readable.extend(files)
         con.execute("SET allowed_paths = ?", [readable])
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
@@ -298,6 +345,44 @@ class Engine:
         columns, rows, _ = self.query(f"SUMMARIZE {table}", SETUP_TIMEOUT_S)
         return [dict(zip(columns, row)) for row in rows], table
 
+    def column_stats(self, table, column, typ):
+        """Detailed statistics for one column: spread and outliers for numbers, top values for text,
+        range and rows per month for dates."""
+        c, typ = ident(column), str(typ).upper()
+        q = lambda sql: self.query(sql, SETUP_TIMEOUT_S)[1]
+        filled, empty = q(f"SELECT count({c}), count(*) - count({c}) FROM {table}")[0]
+        out = {"column": column, "type": typ, "filled": filled, "empty": empty}
+        numeric = any(t in typ for t in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC", "HUGEINT"))
+        if numeric and filled:
+            row = q(f"SELECT min({c}), quantile_cont({c}, [0.05, 0.25, 0.5, 0.75, 0.95]), max({c}), avg({c}), "
+                    f"stddev_samp({c}), count(*) FILTER ({c} < 0), count(*) FILTER ({c} = 0) FROM {table}")[0]
+            p05, q1, med, q3, p95 = row[1]
+            low, high = q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1)
+            outliers = q(f"SELECT count(*) FILTER ({c} < {low} OR {c} > {high}) FROM {table}")[0][0]
+            extremes = [r[0] for r in q(f"SELECT {c} FROM {table} WHERE {c} < {low} OR {c} > {high} "
+                                        f"ORDER BY abs({c} - {med}) DESC LIMIT 3")]
+            out.update(min=row[0], p05=p05, p25=q1, median=med, p75=q3, p95=p95, max=row[2],
+                       mean=row[3], stddev=row[4], negative=row[5], zero=row[6],
+                       outliers={"rule": "outside 1.5 x IQR", "rows": outliers, "most_extreme": extremes})
+        elif ("DATE" in typ or "TIMESTAMP" in typ) and filled:
+            lo, hi = q(f"SELECT min({c}), max({c}) FROM {table}")[0]
+            months = q(f"SELECT strftime(date_trunc('month', {c}), '%Y-%m') m, count(*) FROM {table} "
+                       f"WHERE {c} IS NOT NULL GROUP BY 1 ORDER BY 1 LIMIT 36")
+            out.update(min=lo, max=hi, rows_per_month=[[m, n] for m, n in months])
+        elif filled:
+            distinct, blank, shortest, longest = q(
+                f"SELECT count(DISTINCT {c}), count(*) FILTER (trim({c}::VARCHAR) = ''), "
+                f"min(length({c}::VARCHAR)), max(length({c}::VARCHAR)) FROM {table}")[0]
+            top = q(f"SELECT {c}, count(*) n FROM {table} WHERE {c} IS NOT NULL GROUP BY 1 ORDER BY n DESC, 1 LIMIT 10")
+            out.update(distinct=distinct, blank_text=blank, length=[shortest, longest],
+                       top_values=[[v, n] for v, n in top])
+        return out
+
+    def duplicate_rows(self, table):
+        """Rows that exactly repeat another row (extra copies only)."""
+        return self.query(f"SELECT (SELECT count(*) FROM {table}) - (SELECT count(*) FROM (SELECT DISTINCT * FROM {table}))",
+                          SETUP_TIMEOUT_S)[1][0][0]
+
     def issues(self, table, profile_rows):
         """Data problems worth asking the user about, as short dicts. Reads only aggregates."""
         found = []
@@ -332,8 +417,16 @@ class Engine:
 
 
 def _file_key(path):
-    st = os.stat(path)
-    return path, st.st_mtime_ns, st.st_size
+    """Changes when the file changes, or when a folder or pattern gains, loses or changes a file."""
+    keys = []
+    for f in files_of(path):
+        st = os.stat(f)
+        keys.append((f, st.st_mtime_ns, st.st_size))
+    return path, tuple(keys)
+
+
+def _list_literal(files):
+    return "[" + ", ".join(literal(f) for f in files) + "]"
 
 
 def _with_timeout(con, seconds, fn, *args):
@@ -345,16 +438,29 @@ def _with_timeout(con, seconds, fn, *args):
         timer.cancel()
 
 
-def _scan_rejects(con, path):
-    """Read the whole CSV once and keep the lines the reader could not parse."""
+def _scan_files(con, files, label):
+    """Skipped lines over one or more files (DuckDB cannot collect rejects across a merged read)."""
+    total, first = 0, []
+    for f in files:
+        count, lines = _scan_rejects(con, literal(f))
+        total += count
+        prefix = f"{Path(f).name} " if label else ""
+        first += [(f"{prefix}line {line}", err, text) for line, err, text in lines]
+    return total, first[:MAX_REJECTS]
+
+
+def _scan_rejects(con, target):
+    """Read the whole CSV once and keep the lines the reader could not parse. target: the reader's
+    arguments before the reject options (a path literal or list, plus options)."""
     con.execute(
-        f"SELECT count(COLUMNS(*)) FROM read_csv({literal(path)}, store_rejects = true, "
+        f"SELECT count(COLUMNS(*)) FROM read_csv({target}, store_rejects = true, "
         "rejects_table = 'grimoire_rejects', rejects_scan = 'grimoire_scans')"
     ).fetchall()
-    count = con.execute("SELECT count(*) FROM grimoire_rejects").fetchone()[0]
+    # one bad line can be reported more than once (several errors, or by the sniffer and the scan)
+    count = con.execute("SELECT count(DISTINCT line) FROM grimoire_rejects").fetchone()[0]
     first = con.execute(
-        "SELECT line, error_type, left(csv_line, 200) FROM grimoire_rejects ORDER BY line LIMIT ?",
-        [MAX_REJECTS]).fetchall()
+        "SELECT line, string_agg(DISTINCT error_type, ', '), left(any_value(csv_line), 200) "
+        "FROM grimoire_rejects GROUP BY line ORDER BY line LIMIT ?", [MAX_REJECTS]).fetchall()
     con.execute("DROP TABLE grimoire_rejects")
     con.execute("DROP TABLE grimoire_scans")
     return count, [(int(line), str(err), text) for line, err, text in first]
