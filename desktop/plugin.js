@@ -188,7 +188,11 @@ function Line({ q, li, vi }) {
     ] }, 'g' + i)),
     jsx('polyline', { points: vals.map((v, i) => `${x(i)},${y(v)}`).join(' '), className: 'gr-path-line' }, 'p'),
     ...rows.map((r, i) => jsx('circle', { cx: x(i), cy: y(r[vi]), r: 2.5, className: 'gr-dot', children: jsx('title', { children: `${r[li]}: ${fmt(r[vi])}` }) }, 'd' + i)),
-    ...rows.map((r, i) => (i % every === 0 ? jsx('text', { x: x(i), y: H - 5, textAnchor: 'middle', className: 'gr-tick', children: String(r[li]).slice(0, 10) }, 't' + i) : null))
+    ...rows.map((r, i) => {
+      const last = i === rows.length - 1
+      if (!last && (i % every !== 0 || rows.length - 1 - i < every / 2)) return null
+      return jsx('text', { x: x(i), y: H - 5, textAnchor: i === 0 ? 'start' : last ? 'end' : 'middle', className: 'gr-tick', children: String(r[li]).slice(0, 10) }, 't' + i)
+    })
   ] })
 }
 
@@ -202,7 +206,7 @@ function Bars({ q }) {
   return jsx('div', { className: 'gr-bars', role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: rows.map((r, i) => jsxs('div', { className: 'gr-bar-row', children: [
     jsx('span', { className: 'gr-bar-label', title: String(r[li]), children: fmt(r[li]) }),
     jsx('span', { className: 'gr-bar-track', children: jsx('span', { className: 'gr-bar', style: { width: `${(Math.abs(r[vi]) / top) * 100}%` } }) }),
-    jsx('span', { className: 'gr-bar-value', children: fmt(r[vi]) })
+    jsx('span', { className: 'gr-bar-value', title: fmt(r[vi]), children: Math.abs(r[vi]) >= 10000 ? compact(r[vi]) : fmt(r[vi]) })
   ] }, i)) })
 }
 
@@ -211,7 +215,10 @@ function Result({ q }) {
     return jsx('div', { className: 'gr-kpis', children: q.columns.map((c, i) => jsxs('div', { className: 'gr-kpi', children: [jsx('b', { children: fmt(q.rows[0][i]) }), jsx('span', { children: c })] }, c)) })
   const numeric = q.columns.map((_, i) => q.rows.length > 0 && q.rows.every((r) => isNum(r[i]) || r[i] === null))
   return jsxs('div', { children: [
-    jsx(Bars, { q }),
+    q.chart?.svg
+      // Drawn by the plugin's own report code; every value in it is HTML-escaped there.
+      ? jsx('div', { className: 'gr-svg', dangerouslySetInnerHTML: { __html: q.chart.svg } })
+      : jsx(Bars, { q }),
     jsx('div', { className: 'gr-table-wrap', children: jsxs('table', { className: 'gr-table', children: [
       jsx('thead', { children: jsx('tr', { children: q.columns.map((c, i) => jsx('th', { className: numeric[i] ? 'gr-num' : '', children: c }, i)) }) }),
       jsx('tbody', { children: q.rows.map((r, n) => jsx('tr', { children: r.map((v, i) => jsx('td', { className: numeric[i] ? 'gr-num' : '', children: fmt(v) }, i)) }, n)) })
@@ -345,6 +352,9 @@ const CSS = `
 .gr-bar-row{display:contents}.gr-bar-label{text-align:right;color:var(--ui-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}
 .gr-bar-track{height:12px}.gr-bar{display:block;height:100%;min-width:2px;border-radius:2px;background:var(--ui-accent)}
 .gr-bar-value{font-variant-numeric:tabular-nums;color:var(--ui-text-secondary);font-size:12px}
+.gr-svg svg{width:100%;max-width:640px;margin:10px 0;display:block}.gr-svg .bar,.gr-svg .cell{fill:var(--ui-accent)}
+.gr-svg .pt{fill:var(--ui-accent);stroke:var(--background);stroke-width:2}.gr-svg .grid{stroke:var(--ui-stroke-secondary);stroke-width:1}
+.gr-svg .lbl{fill:var(--ui-text-tertiary);font-size:11px}
 .gr-line{width:100%;max-width:640px;margin:10px 0;display:block}.gr-path-line{fill:none;stroke:var(--ui-accent);stroke-width:2}
 .gr-dot{fill:var(--ui-accent)}.gr-grid{stroke:var(--ui-stroke-secondary)}.gr-tick{fill:var(--ui-text-tertiary);font-size:11px}
 .gr-table-wrap{overflow-x:auto;margin-top:8px}.gr-table{border-collapse:collapse;font-size:12px}
