@@ -1,7 +1,7 @@
 ---
 name: explore-data
 description: "Answer questions about CSV, JSON, Parquet or SQLite files with Grimoire, so every number comes from a query."
-version: 0.5.0
+version: 0.5.1
 license: MIT
 metadata:
   hermes:

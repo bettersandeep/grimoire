@@ -37,20 +37,31 @@ REAL_RESULTS = [
 def test_verify():
     # precision, suffixes, percent, ignored spans
     vals = [76840174.17, 14.2, 0.383, 2436]
-    assert verify.check("North made 76.8M", vals) == (["76.8M"], [])
-    assert verify.check("North made ₹76,840,174.17", vals) == (["76,840,174.17"], [])
-    assert verify.check("growth was 14.2%", vals) == (["14.2%"], [])
-    assert verify.check("38.3% are empty", vals) == (["38.3%"], [])  # matches 0.383
-    assert verify.check("2,436 rows", vals) == (["2,436"], [])
-    assert verify.check("2,437 rows", vals) == ([], ["2,437"])
-    skipped = "In 2026 on 2026-01-03 at 10:30, see [q7] and q12, `SELECT 42`, divide by 100, 4xx codes.\n1. first"
-    assert verify.check(skipped, vals) == ([], []), verify.extract(skipped)
-    assert verify.check("top 3 regions", vals, ignore=["3"]) == ([], [])
+    chk = lambda text, v=vals, **kw: verify.check(text, v, **kw)
+    assert chk("North made 76.8M") == (["76.8M"], [], [])
+    assert chk("North made ₹76,840,174.17") == (["76,840,174.17"], [], [])
+    assert chk("growth was 14.2%") == (["14.2%"], [], [])
+    assert chk("38.3% are empty") == (["38.3%"], [], [])  # matches 0.383
+    assert chk("2,436 rows") == (["2,436"], [], [])
+    assert chk("2,437 rows") == ([], [], ["2,437"])
+    skipped = ("In 2026 on 2026-01-03 at 10:30, see [q7] and q12, `SELECT 42`, divide by 100 or 100.0, "
+               "April (2026-04), 4xx codes.\n1. first")
+    assert chk(skipped) == ([], [], []), verify.extract(skipped)
+    assert chk("top 3 regions", ignore=["3"]) == ([], [], [])
     assert verify.footer([], []) == ""
-    # the real reply: the derived total and the invented count have no source
-    sourced, unsourced = verify.check(REAL_REPLY, verify.numeric_values(REAL_RESULTS))
-    assert unsourced == ["76,840,174.17", "5"], unsourced
-    assert len(sourced) == 9, sourced
+    # derived numbers: simple arithmetic on shown numbers, unit changes, column totals
+    v = [50000, 1996, 189759.34, 72188507.98, 4651666.19]
+    assert chk("50,000 rows, 1,996 empty, so 48,004 kept", v) == (["50,000", "1,996"], ["48,004"], [])
+    assert chk("₹189,759.34 (18,975,934 paise)", v) == (["189,759.34"], ["18,975,934"], [])
+    assert chk("72,188,507.98 and 4,651,666.19 make 76,840,174.17", v)[1] == ["76,840,174.17"]
+    assert chk("Total ₹300", [100, 200], totals=[300])[1] == ["300"]
+    assert chk("964 of 1000 rows have an amount (36 skipped)", [1000, 964]) == (["964"], ["36"], [])
+    assert chk("about 2,000 empty", v) == ([], [], ["2,000"])  # rounded: still flagged
+    # the real reply: the derived total is now traced by arithmetic; the invented count is still flagged
+    sourced, derived, unsourced = verify.check(REAL_REPLY, verify.numeric_values(REAL_RESULTS))
+    assert unsourced == ["5"], (unsourced, derived)
+    assert derived == ["76,840,174.17"] and len(sourced) == 9, (sourced, derived)
+    assert "1 by simple arithmetic: 76,840,174.17" in verify.footer(sourced, unsourced, derived)
 
 
 def test_data_quality(tmp, db):
@@ -302,7 +313,7 @@ def main():
     tools.remember_user_message("test", "show the top 2 regions")
     note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
     assert "2 of 3" in note and "999" in note and "No source" in note, note
-    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith("the number matches query results.")
+    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith("the number traces to query results.")
     assert tools.check_reply("no numbers here", "test") == ""
     assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
 
