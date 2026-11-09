@@ -380,7 +380,10 @@ def drivers(args, session_id=None, **kwargs):
         time_column = args.get("time_column", "")
         if time_column not in types:
             return _err(f"No column '{time_column}' in {ref}. Columns: {', '.join(types)}")
-        measure, _used = metrics.expand(args.get("measure", "") or "count(*)", store.metrics(db))
+        raw = (args.get("measure") or "count(*)").strip()
+        if raw in types:  # a bare column means its total: models often pass "amount" for sum(amount)
+            raw = f"sum({engine.ident(raw)})"
+        measure, _used = metrics.expand(raw, store.metrics(db))
         dims = [d for d in (args.get("dimensions") or []) if d in types and d != time_column]
         if not dims:  # text columns with 2 to 50 values: the ones a change can be split by
             text = [c for c, t in types.items() if t == "VARCHAR" and c != time_column]
@@ -440,6 +443,10 @@ def merge(args, **kwargs):
         return _err(f"merge failed: {exc}")
 
 
+_CHANGE = re.compile(r"\b(why|drop(ped)?|fell|fall|rose|rise|grew|grow|increase[sd]?|decrease[sd]?|declin\w*|"
+                     r"chang\w*|jump\w*|spike\w*|driv\w*|explain)\b", re.I)
+
+
 def auto_attach(user_message, session_id=None, cwd=None):
     """Attach the data files a message names, in plugin code, and return context that lets the model
     answer with one grimoire_query call (no tool loading, no attach round trip). None when no file is
@@ -477,6 +484,10 @@ def auto_attach(user_message, session_id=None, cwd=None):
     if saved:
         lines.append("Saved metrics (write name() in SQL; Grimoire fills in the definition): "
                      + "; ".join(f"{n}() = {e}" for n, e in saved.items()))
+    if _CHANGE.search(user_message or ""):  # only for "why did it change" questions: fewer tokens otherwise
+        lines.append('For why a number changed between two periods, use tool_call with name "grimoire_drivers" '
+                     'and arguments like {"dataset": "<name>", "measure": "sum(<column>)", "time_column": "<date column>", '
+                     '"before": "2026-02", "after": "2026-03"} instead.')
     return (
         "[Grimoire] Data files are attached:\n" + "\n".join(lines) + "\n"
         "Answer with one call: tool_call with name \"grimoire_query\" and arguments "

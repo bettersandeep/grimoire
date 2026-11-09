@@ -192,6 +192,8 @@ def test_auto_attach(tmp, db):
     assert 'tool_call with name "grimoire_query"' in ctx, ctx
     assert call(tools.query, sql="SELECT sum(visits) FROM visits")["rows"] == [[12]]
     assert tools.auto_attach("hello there", "auto") is None
+    assert "grimoire_drivers" not in ctx  # plain questions do not pay for the drivers hint
+    assert "grimoire_drivers" in tools.auto_attach("Why did visits drop in shop/visits.csv?", "auto", cwd=str(tmp))
     hint = tools.auto_attach("what about nope/missing.csv?", "auto", cwd=str(tmp))
     assert hint.startswith("[Grimoire] Data file mentioned: nope/missing.csv"), hint
     # an unchanged file is not reopened; a changed one is
@@ -326,6 +328,8 @@ def test_drivers(tmp, db):
     r = call(tools.drivers, dataset="shop", measure="avg(amount)", time_column="day", before="2026-02", after="2026-03",
              dimensions=["region"])
     assert r["split_by"] == ["region"] and "does not add up" in r["how_to_read"], r
+    r = call(tools.drivers, dataset="shop", measure="amount", time_column="day", before="2026-02", after="2026-03")
+    assert r["rows"][0][2:5] == [250, 250, 0], r  # a bare column is summed
     assert drivers_mod.additive("sum(x) / 100") and drivers_mod.additive("count(*)") and not drivers_mod.additive("avg(x)")
     assert not drivers_mod.additive("sum(a) / sum(b)")
     for bad in [dict(before="Feb", after="2026-03"), dict(before="2030-01", after="2030-02"), dict(time_column="nope")]:
