@@ -9,6 +9,10 @@ import re
 MAX_RECIPES = 2
 
 RECIPES = [
+    (r"\b(significan\w*|real difference|really differ\w*|by chance|statistical\w*|p-?values?|a/b|ab test)\b",
+     'To test if two groups really differ, use tool_call with name "grimoire_compare" and arguments like '
+     '{"dataset": "<name>", "measure": "<number column, or a condition>", "group_column": "<column>", "a": "<value>", '
+     '"b": "<value>"}.'),
     (r"\b(share|percent(age)?|proportion|portion)\b|% of",
      "Share of total: round(100 * sum(x) / sum(sum(x)) OVER (), 1) AS pct with GROUP BY."),
     (r"\b(growth|grow\w*|month[- ]over[- ]month|year[- ]over[- ]year|mom|yoy|vs\.? last)\b",
@@ -35,6 +39,9 @@ RECIPES = [
      "Distribution: floor(x / w) * w AS bucket, count(*) GROUP BY 1 ORDER BY 1; spread: stddev_samp(x)."),
     (r"\b(weekday|weekend|day of (the )?week|hour of|by hour|time of day)\b",
      "Time of week: dayname(d) or isodow(d) (1 = Monday); hour: hour(ts)."),
+    (r"\b(seasonal\w*|seasons?|every year|time of year)\b",
+     "Seasonality: average per month of year, month(d) AS m with avg(monthly_total) across years; compare each "
+     "month with the overall average; one year of data cannot show a season."),
     (r"\b(trend|forecast|projection|predict\w*|next (month|quarter|year))\b",
      "Trend: regr_slope(y, epoch(d)) per second, or regr_slope(total, month_index) over a monthly series; "
      "call any projection rough."),

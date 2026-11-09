@@ -38,6 +38,10 @@ _EXPLAIN = {
 
 # SQL ideas a teach-me card can explain, most specific first: (pattern in SQL, key, lesson).
 _CONCEPTS = [
+    (r"\bcorr\s*\(", "correlation", "corr(x, y) runs from -1 to 1 and says how closely two columns move "
+     "together. It does not say which one causes the other, or whether a third thing drives both."),
+    (r"\bregr_slope\s*\(", "trend", "regr_slope(y, x) fits a straight line and returns how much y changes per "
+     "step of x. Extending the line into the future is a rough guess: it ignores seasons and sudden changes."),
     (r"\bover\s*\(", "window", "A window function, like sum(...) OVER (...), computes a value per row "
      "from other rows (a running total or a share) without collapsing rows the way GROUP BY does."),
     (r"\bcount\s*\(\s*\*\s*\)", "count-star", "count(*) counts rows; count(column) counts only rows where "
