@@ -1,5 +1,28 @@
 # Benchmark results (2026-11-09)
 
+## v0.6.0: one call per answer
+
+v0.6.0 opens a file named in the message before the model starts and tells the model the table and columns, so the model answers with one `grimoire_query` call through Hermes's `tool_call` bridge.
+Before, an answer took 4 API calls (load the tool, attach, query, answer), and every call resends about 12,000 tokens of system prompt and tool list.
+The data itself was never the cost: query results are a few hundred characters.
+
+Same 8 questions and model, 24 answers with Grimoire v0.6.0 (raw records: `bench/results-v0.6.0.jsonl`), against the 40 plain answers below:
+
+| | Plain Hermes | Grimoire v0.4.0 | Grimoire v0.6.0 |
+|---|---|---|---|
+| API calls per answer (median) | 5 | 4 | 2 |
+| Input tokens (median, with cached) | 61,051 | 47,619 | 23,300 (62% fewer than plain) |
+| Output tokens (median) | 858 | 378 | 301 |
+| Time per answer (median) | 30 s | 19 s | 12 s (60% faster) |
+| Cost per answer (median)* | $0.0504 | $0.0319 | $0.0239 (53% cheaper) |
+| Correct | 39 of 40 | 40 of 40 | 23 of 24 |
+
+The one wrong v0.6.0 answer is the reason the number check exists.
+The query returned 1,091 units; the model wrote "10,911 units".
+Grimoire flagged it: "0 of 1 numbers trace to query results. No source query for: 10,911".
+
+## v0.4.0 against plain Hermes
+
 Same 8 questions, same model, two Hermes profiles that differ only in Grimoire (v0.4.0).
 Model: `meituan/longcat-2.5:free` on Nous Portal.
 Files: `bench/make_data.py` sales data with messy regions, about 4% empty amounts and 2% empty dates.
