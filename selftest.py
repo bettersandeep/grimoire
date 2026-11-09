@@ -441,6 +441,8 @@ def test_compare(tmp, db):
     assert abs(r["rows"][0][2] - 66.5) < 0.01 and r["rows"][1][2] == 50.0, r
     r = call(tools.compare, dataset="ab", measure="amount > 103", group_column="variant", a="A", b="C")
     assert "only 5 rows" in r["verdict"], r
+    assert pkg.audit._plain("CAST(\"variant\" AS VARCHAR) IN ('A', 'C')") == "variant is A or C"
+    assert pkg.audit._plain("region IN ('North')") == "region is North"
     q = store.get_query(db, r["id"])
     assert q["columns"] == ["group", "rows", "pct", "difference", "p_value"] and q["datasets"] == ["ab"]
     assert "No rows where variant is 'Z'" in call(tools.compare, dataset="ab", measure="amount", group_column="variant", a="A", b="Z")["error"]
