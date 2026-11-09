@@ -421,6 +421,28 @@ def test_profile_checks(tmp, db):
     assert store.forget_dataset(db, "odd") and store.get_json(db, "health:odd", None) is None
 
 
+def test_charts():
+    report = pkg.report
+    days = ["Sunday", "Monday", "Tuesday"]
+    grid = [[d, h, 10 * h + i] for i, d in enumerate(days) for h in range(24)]
+    kind = lambda cols, rows: report.chart_kind(cols, rows)
+    assert kind(["day", "hour", "trips"], grid) == "heatmap"
+    assert kind(["bucket", "n"], [[0, 5], [10, 9], [20, 4], [30, 1]]) == "histogram"
+    assert kind(["bucket", "n"], [[0, 5], [10, 9], [25, 4], [30, 1], [40, 2]]) == "scatter"  # uneven steps
+    assert kind(["fare", "tip"], [[3.5, 1], [9, 2], [12, 2.5], [30, 6], [44, 9]]) == "scatter"
+    assert kind(["month", "n"], [["2026-01", 1], ["2026-02", 2], ["2026-03", 3]]) == "line"
+    assert kind(["region", "n"], [["North", 1], ["South", 2]]) == "bars"
+    assert kind(["n"], [[1]]) is None
+    assert report._order(["Wed", "Monday", "sunday", "Jan", "x", 3, 1]) == [1, 3, "Monday", "Wed", "sunday", "Jan", "x"]
+    q = {"id": "q1", "columns": ["day", "hour", "trips"], "rows": grid}
+    svg = report.chart_svg(q)
+    assert svg.count('class="cell"') == 72 and svg.index(">Sunday<") > svg.index(">Tuesday<") and "Stronger color" in svg
+    evil = {"id": "q2", "columns": ["a<b>", "n"], "rows": [["<script>", 1], ["x", 2]]}
+    assert "<script>" not in report.chart_svg(evil) and "&lt;script&gt;" in report.chart_svg(evil)
+    assert report.chart_svg({"id": "q3", "columns": ["a", "b"], "rows": [[0, 1], [1, 2], [2, 3]]}).count('class="bar"') == 3
+    assert report._short(91000000.0) == "91M" and report._short(950.5) == "950.50"
+
+
 class FakeCtx:
     """Just enough of the Hermes plugin context to run register() and call the hooks."""
     def __init__(self):
@@ -642,6 +664,7 @@ def main():
     test_profile_checks(tmp, db)
     test_lean_setup(tmp, db)
     test_recipes(tmp, db)
+    test_charts()
     print("selftest passed")
 
 

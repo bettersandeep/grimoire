@@ -34,6 +34,7 @@ def _load(name):
 
 store = _load("store")
 learning = _load("learning")
+report = _load("report")
 router = APIRouter()
 
 
@@ -97,6 +98,9 @@ def queries(dataset: str | None = None, limit: int = 30):
         q = store.get_query(db, qid)
         if q:
             q["total_rows"] = len(q["rows"])
+            kind = report.chart_kind(q["columns"], q["rows"])
+            if kind in ("heatmap", "histogram", "scatter"):  # drawn here from all rows; the page draws bars and lines
+                q["chart"] = {"kind": kind, "svg": report.chart_svg(q)}
             q["rows"] = q["rows"][:50]
             out.append(q)
     return {"queries": out}
