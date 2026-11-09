@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-from . import audit, engine, learning, metrics, report, store, tools
+from . import audit, engine, learning, metrics, report, store, tools, walkthrough
 
 HELP = """Commands:
   /grimoire                          status
@@ -19,6 +19,7 @@ HELP = """Commands:
   /grimoire rerun q12                run the SQL again and check the result still holds
   /grimoire report [dataset]         an HTML report of the last session's queries (or one file's)
   /grimoire learn on | off           learning mode: a short lesson after data answers
+  /grimoire learn plain | sql        lesson style: how the answer was made in plain words, or the SQL
   /grimoire learn predict on | off   guess the answer before you see it (needs learning mode)
   /grimoire define <name> = <expr>   save a metric, e.g. revenue = sum(amount_cents) / 100
   /grimoire metrics                  saved metrics; /grimoire undefine <name> removes one
@@ -63,7 +64,7 @@ def run(raw_args="", **kwargs):
         if cmd == "sql" and rest:
             return _sql(db, rest[0])
         if cmd == "explain" and rest:
-            return _explain(db, rest[0])
+            return _explain(db, rest[0], eng)
         if cmd == "chart" and rest:
             q = store.get_query(db, rest[0])
             return report.text_chart(q) if q else f"No query {rest[0]}."
@@ -146,7 +147,9 @@ def _status(db, eng, session_id=None):
     learn, predict = tools.learning_state()
     stats = store.get_json(db, "predictions", {"asked": 0, "close": 0})
     score = f" ({stats['close']} of {stats['asked']} guesses within 10%)" if predict and stats["asked"] else ""
-    lines.append(f"Learning mode: {'on' if learn else 'off'} · Predictions: {'on' if predict else 'off'}{score}")
+    style = store.get_setting(db, "learn_style", "plain")
+    lines.append(f"Learning mode: {'on' if learn else 'off'} ({'plain words' if style == 'plain' else 'SQL'}) · "
+                 f"Predictions: {'on' if predict else 'off'}{score}")
     size = tools.call_size(session_id)
     if size:
         lean = size[0] <= tools.LEAN_TOOLS
@@ -222,9 +225,15 @@ def _learn(db, rest):
     if rest in (["on"], ["off"]):
         store.set_setting(db, "learn", rest[0])
         if rest[0] == "on":
-            return ("Learning mode is on. After answers about your data you get one SQL idea and one question "
-                    "worth asking. Type /grimoire learn predict on to guess answers first.")
+            return ("Learning mode is on. After answers about your data you see how the answer was made, step by "
+                    "step, and one question worth asking. /grimoire learn sql switches to SQL lessons; "
+                    "/grimoire learn predict on asks you to guess answers first.")
         return "Learning mode is off. Answers have no lessons or predictions."
+    if rest in (["plain"], ["sql"]):
+        store.set_setting(db, "learn_style", rest[0])
+        return ("Lessons now walk through how each answer was made, step by step, in plain words."
+                if rest[0] == "plain" else "Lessons now teach one SQL idea from each answer.") + (
+            "" if store.get_setting(db, "learn", "off") == "on" else " Turn learning mode on with /grimoire learn on")
     if rest in (["predict", "on"], ["predict", "off"]):
         if rest[1] == "on" and store.get_setting(db, "learn", "off") != "on":
             return "Turn on learning mode first: /grimoire learn on"
@@ -236,11 +245,20 @@ def _learn(db, rest):
             "Change with /grimoire learn on|off and /grimoire learn predict on|off")
 
 
-def _explain(db, qid):
+def _explain(db, qid, eng=None):
     q = store.get_query(db, qid)
     if q is None:
         return f"No query {qid}."
-    return f"{q['id']}: {q['purpose'] or ''}".rstrip(": ") + "\n" + learning.explain(q["sql"], q["question"], q["columns"])
+    head = f"{q['id']}: {q['purpose'] or ''}".rstrip(": ")
+    try:
+        lines = walkthrough.steps(q, eng) if eng is not None else []
+        if lines:
+            store.set_json(db, f"steps:{q['id']}", lines)  # for Desktop's Explain
+        plain = "\n".join(lines)
+    except Exception:
+        plain = ""
+    plain = f"\nIn plain words:\n{plain}\n" if plain else ""
+    return head + plain + "\n" + learning.explain(q["sql"], q["question"], q["columns"])
 
 
 def _sql(db, qid):

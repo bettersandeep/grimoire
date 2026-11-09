@@ -78,6 +78,7 @@ def summary():
     return {
         "version": _version(), "learn": learn,
         "predict": learn and store.get_setting(db, "predict", "off") == "on",
+        "learn_style": store.get_setting(db, "learn_style", "plain"),
         "predictions": store.get_json(db, "predictions", {"asked": 0, "close": 0}),
         "datasets": datasets, "pending": pending,
         "metrics": [{"name": n, "expression": e} for n, e in store.metrics(db).items()],
@@ -111,7 +112,9 @@ def explain(qid: str):
     q = store.get_query(_db(), qid)
     if q is None:
         raise HTTPException(404, f"No query {qid}.")
-    return {"id": q["id"], "text": learning.explain(q["sql"], q["question"], q["columns"])}
+    steps = store.get_json(_db(), f"steps:{q['id']}", [])  # saved when the chat computed them (needs DuckDB)
+    plain = ("In plain words:\n" + "\n".join(steps) + "\n\n") if steps else ""
+    return {"id": q["id"], "text": plain + learning.explain(q["sql"], q["question"], q["columns"])}
 
 
 @router.post("/settings")
@@ -121,6 +124,8 @@ def settings(body: dict = Body(...)):
         store.set_setting(db, "learn", "on" if body["learn"] else "off")
         if not body["learn"]:
             store.set_setting(db, "predict", "off")
+    if body.get("learn_style") in ("plain", "sql"):
+        store.set_setting(db, "learn_style", body["learn_style"])
     if body.get("hide_lean_tip"):
         store.set_setting(db, "lean_card", "hidden")
     if "predict" in body:

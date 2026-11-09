@@ -83,7 +83,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL, with a file filter and search, tables that sort by any column, caveats under each result, and an "About the data" part (health, data problems, column notes, saved metrics). The chart fits the result: line for time, heatmap for two labels and a number (weekday by hour), histogram for equal buckets, scatter for two numbers, bars otherwise |
 | Remembers | Files, column notes and merge rules across sessions |
 | Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
-| Teaches (opt-in) | A short SQL lesson and a better question after answers; optional "guess first" predictions |
+| Teaches (opt-in) | Plain words (default): how each answer was made, step by step, with the row count at each step and the result in context ("18.4% more than South"). SQL: one SQL idea per answer. Both end with a better question to ask next; optional "guess first" predictions |
 
 ## Commands
 

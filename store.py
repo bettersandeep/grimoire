@@ -109,12 +109,20 @@ def forget_dataset(db, name):
                          ("pending_merges", "dataset = ?"),
                          ("queries", "instr(',' || coalesce(datasets, '') || ',', ',' || ? || ',') > 0")):
         counts[table] = db.execute(f"DELETE FROM {table} WHERE {where}", (name,)).rowcount
+    _prune_steps(db)
     db.commit()
     return counts
 
 
+def _prune_steps(db):
+    """Saved plain-words steps hold result values: drop those whose query is gone."""
+    db.execute("DELETE FROM settings WHERE key LIKE 'steps:q%' "
+               "AND CAST(substr(key, 8) AS INTEGER) NOT IN (SELECT id FROM queries)")
+
+
 def clear_history(db):
     n = db.execute("DELETE FROM queries").rowcount
+    _prune_steps(db)
     db.commit()
     return n
 
