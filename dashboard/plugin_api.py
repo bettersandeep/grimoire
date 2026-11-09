@@ -217,7 +217,7 @@ def chart(body: dict = Body(...)):
             eng = _engine_for(db, name)
             refs = eng.tables(name)
             ref = body.get("table") or refs[0]
-            if ref not in refs:
+            if not isinstance(ref, str) or ref not in refs:
                 raise HTTPException(400, f"No table {ref} in {name}.")
             table = tools._sql_ref(ref)
             sql, purpose = builder.build(table, dict(eng.schema(table)), body)
