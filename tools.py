@@ -36,9 +36,7 @@ _last_qid = OrderedDict()   # session -> the last query id it ran
 _guesses = OrderedDict()    # session -> the user's prediction, waiting for the answer
 _last = {"session": None}
 _calls = OrderedDict()      # session -> (most tools, fewest tokens) one model call sent; numbers only
-
-# A chat with more tools than this runs full Hermes; a Grimoire-only bot sends about 10.
-LEAN_TOOLS = 15
+LEAN_TOOLS = store.LEAN_TOOLS
 
 
 def _bucket(table, session_id):
@@ -132,9 +130,12 @@ def call_size(session_id):
 def lean_tip(db, session_id):
     """One-time tip, with this chat's real numbers, when it runs full Hermes. "" otherwise."""
     size = call_size(session_id)
-    if not size or size[0] <= LEAN_TOOLS:
+    if not size:
         return ""
-    store.set_json(db, "call_size", {"tools": size[0], "tokens": size[1]})
+    if store.get_json(db, "call_size", {}) != {"tools": size[0], "tokens": size[1]}:
+        store.set_json(db, "call_size", {"tools": size[0], "tokens": size[1]})  # for the Desktop page
+    if size[0] <= LEAN_TOOLS:
+        return ""
     if store.get_setting(db, "lean_tip", "") == "shown":
         return ""
     store.set_setting(db, "lean_tip", "shown")

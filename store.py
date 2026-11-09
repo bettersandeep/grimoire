@@ -3,6 +3,9 @@
 import json
 import time
 
+# A chat that sends more tools than this runs full Hermes; a Grimoire-only bot sends fewer.
+LEAN_TOOLS = 15
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS datasets (
     name        TEXT PRIMARY KEY,

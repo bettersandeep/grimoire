@@ -70,6 +70,8 @@ def summary():
             "merges": _merge_lines(store.merges(db, name)),
             "issues": store.get_json(db, f"issues:{name}", []),
         })
+    size = store.get_json(db, "call_size", {})
+    lean_tip = size if size.get("tools", 0) > store.LEAN_TOOLS and store.get_setting(db, "lean_card", "") != "hidden" else None
     pending = [{"dataset": d, "column": c, "from": a, "to": b} for d, _t, c, a, b in store.pending_merges(db)]
     return {
         "version": _version(), "learn": learn,
@@ -77,6 +79,7 @@ def summary():
         "predictions": store.get_json(db, "predictions", {"asked": 0, "close": 0}),
         "datasets": datasets, "pending": pending,
         "metrics": [{"name": n, "expression": e} for n, e in store.metrics(db).items()],
+        "lean_tip": lean_tip,
     }
 
 
@@ -113,6 +116,8 @@ def settings(body: dict = Body(...)):
         store.set_setting(db, "learn", "on" if body["learn"] else "off")
         if not body["learn"]:
             store.set_setting(db, "predict", "off")
+    if body.get("hide_lean_tip"):
+        store.set_setting(db, "lean_card", "hidden")
     if "predict" in body:
         if body["predict"] and store.get_setting(db, "learn", "off") != "on":
             raise HTTPException(400, "Turn on learning mode first.")
