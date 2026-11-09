@@ -504,6 +504,9 @@ def test_glob_and_names(tmp, db):
     text = "6 files: yellow_2024-05.parquet has 3,723,833 rows (2024-01 through 06); 5 rows are odd."
     assert [c["raw"] for c in verify.extract(text)] == ["6", "3,723,833", "5"], verify.extract(text)
     assert verify.check(text, [3723833, 6])[2] == ["5"]
+    # clock times: "6 PM" is the hour 18, so it traces to 18; a wrong hour is still flagged
+    assert verify.check("Hour 18 (6 PM) has 1,456,754 trips", [18, 1456754]) == (["18", "6 PM", "1,456,754"], [], [])
+    assert verify.check("busiest at 7 pm", [18])[2] == ["7 pm"] and verify.check("at 12 a.m.", [0])[0] == ["12 a.m."]
 
 
 def test_recipes(tmp, db):

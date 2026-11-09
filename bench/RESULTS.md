@@ -1,5 +1,31 @@
 # Benchmark results (2026-11-09)
 
+## v0.19.1: NYC taxi trips, 20.3M rows
+
+Real public data: NYC yellow taxi trips, January to June 2024, as 6 Parquet files (340 MB) and as one 2 GB CSV.
+6 questions per file, free model `meituan/longcat-2.5:free`, one run each, 2026-11-09.
+True answers come from SQL written by hand for this data (`bench/nyc.py`).
+Raw results: `results-nyc.jsonl`.
+
+| File | Setup | Correct | Input tokens (median) | Time (median) | Cost per answer* | Tool calls |
+|---|---|---|---|---|---|---|
+| Parquet | Plain Hermes | 6/6 | 123,437 | 75 s | $0.0912 | 10 |
+| Parquet | Hermes with Grimoire | 6/6 | 23,866 | 12 s | $0.0277 | 1 |
+| Parquet | Data bot (Grimoire's tools only) | 6/6 | 5,037 | 12 s | $0.0112 | 1 |
+| CSV, 2 GB | Plain Hermes | 6/6 | 58,640 | 111 s | $0.0424 | 4 |
+| CSV, 2 GB | Hermes with Grimoire | 6/6 | 23,752 | 17 s | $0.0271 | 1 |
+| CSV, 2 GB | Data bot (Grimoire's tools only) | 6/6 | 4,504 | 13 s | $0.0101 | 1 |
+
+*Tokens priced at $3 input, $0.30 cached input and $15 output per million.
+
+What this shows:
+
+- Every setup got every answer right; this model can write DuckDB itself.
+- Plain Hermes paid for it: it searched the disk for a Python with pyarrow or a DuckDB binary, wrote scripts, and retried. One run walked the home folder with `find`, which made macOS ask for Music and Photos access.
+- With Grimoire every answer took one query. The Data bot used 24 to 25 times fewer input tokens than plain Hermes on Parquet, and 6 to 9 times less time.
+- The number check passed 22 of 24 Grimoire answers. The 2 it flagged wrote "hour 18 (6 PM)"; v0.19.2 reads "6 PM" as the hour 18.
+- Before v0.19.1 a glob path in the question was not opened in advance, and one answer took 6 calls and 84,807 tokens.
+
 ## v0.6.0: one call per answer
 
 v0.6.0 opens a file named in the message before the model starts and tells the model the table and columns, so the model answers with one `grimoire_query` call through Hermes's `tool_call` bridge.

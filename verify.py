@@ -16,6 +16,7 @@ _NUM = re.compile(r"(?<![\w.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\
 _SUFFIX = re.compile(
     r"\s?(%|percent|thousand|million|billion|lakh|crore|bn|mn|cr|k|m|b)(?![a-z])", re.I
 )
+_CLOCK = re.compile(r"\s?([ap]\.?m\.?)(?![a-z])", re.I)
 _MULT = {
     "thousand": 1e3, "k": 1e3, "million": 1e6, "mn": 1e6, "m": 1e6,
     "billion": 1e9, "bn": 1e9, "b": 1e9, "lakh": 1e5, "crore": 1e7, "cr": 1e7,
@@ -38,6 +39,11 @@ def extract(text):
         after = text[m.end():]
         suffix = _SUFFIX.match(after)
         unit = suffix.group(1).lower() if suffix else ""
+        clock = _CLOCK.match(after)
+        if clock and re.fullmatch(r"\d{1,2}", core) and 1 <= int(core) <= 12:
+            hour = int(core) % 12 + (12 if clock.group(1).lower().startswith("p") else 0)
+            claims.append({"raw": core + clock.group(0), "value": float(hour), "tol": 0.5, "percent": False})
+            continue  # "6 PM" is the hour 18
         if not suffix and re.match(r"[A-Za-z_\d]", after[:1]):
             continue  # part of a word or id, like 4xx, 2nd, x86
         before = text[max(0, m.start() - 2):m.start()]
