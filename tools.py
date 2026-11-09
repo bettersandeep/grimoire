@@ -431,7 +431,7 @@ def query(args, session_id=None, **kwargs):
             _put(_last_qid, session_id, qid)
         result = {"id": qid, "columns": columns, "rows": rows, "note": UNTRUSTED}
         if used:
-            result["metrics"] = f"Used saved metric(s): {', '.join(n + '()' for n in used)}."
+            result["metrics"] = f"Used saved metric{'s' if len(used) > 1 else ''}: {', '.join(n + '()' for n in used)}."
         if truncated:
             result["truncated"] = f"Only the first {engine.MAX_ROWS} rows are shown. Aggregate in SQL instead."
         result["cite"] = f"Cite numbers from this result as [{qid}]."

@@ -411,15 +411,10 @@ class Engine:
                     found.append({"column": col, "issue": f"text column that is almost all {label}s",
                                   "bad_rows": filled - ok, "examples": bad})
             if (r.get("approx_unique") or 0) <= 1000:
-                rows = self.query(
-                    f"SELECT lower(regexp_replace({c}, '[^A-Za-z0-9]', '', 'g')) AS k, {c}, count(*) "
-                    f"FROM {table} WHERE {c} IS NOT NULL GROUP BY 1, 2 "
-                    f"QUALIFY count(*) OVER (PARTITION BY k) > 1 ORDER BY k, 3 DESC")[1]
-                groups = {}
-                for key, value, n in rows:
-                    groups.setdefault(key, []).append({"value": value, "rows": n})
-                for variants in list(groups.values())[:5]:
-                    found.append({"column": col, "issue": "spelling variants of one value", "variants": variants})
+                counts = dict(self.query(f"SELECT {c}, count(*) FROM {table} WHERE {c} IS NOT NULL GROUP BY 1")[1])
+                for group in variant_groups(counts)[:5]:
+                    found.append({"column": col, "issue": "spelling variants of one value",
+                                  "variants": [{"value": v, "rows": counts[v]} for v in group]})
         return found + self.suspicious(table, profile_rows)
 
     def suspicious(self, table, profile_rows, today=None):
@@ -442,6 +437,72 @@ PLACEHOLDERS = ("n/a", "na", "#n/a", "null", "none", "nil", "-", "--", "?", "unk
 SENTINELS = (-9999999, -999999, -99999, -9999, -999, 999, 9999, 99999, 999999, 9999999)
 _AMOUNT = re.compile(r"amount|price|cost|revenue|sales|total|qty|quantity|units|cents|paise|fare|fee", re.I)
 _NUMBER_TYPES = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC")
+
+
+def _key(text):
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _one_edit(a, b):
+    """True when a and b differ by one inserted, deleted or changed letter."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), len(a))
+    return a[i + (len(a) == len(b)):] == b[i + 1:]
+
+
+RARE = 0.1  # a variant has at most a tenth of the rows of the value it copies; two common values are both real
+FUZZY_MAX = 300  # distinct values compared pair by pair; more than this gets only the exact check
+
+
+def variant_groups(counts):
+    """Groups of labels that look like one value written differently, most rows first.
+
+    counts: {label: rows}. Three general signs, for any kind of data:
+    the same letters and digits ('North', 'north '); one letter off, for words of 5 or more letters, when one
+    is rare ('Electronics', 'Electroncs'); a rare abbreviation with a dot whose start fits exactly one common
+    label ('Calif.' and 'California', 'N. Region' and 'North').
+    """
+    labels = [v for v in counts if isinstance(v, str) and _key(v)]
+    parent = {v: v for v in labels}
+
+    def root(v):
+        while parent[v] != v:
+            v = parent[v]
+        return v
+
+    def join(a, b):
+        parent[root(a)] = root(b)
+
+    by_key = {}
+    for v in labels:
+        by_key.setdefault(_key(v), []).append(v)
+    for same in by_key.values():
+        for v in same[1:]:
+            join(v, same[0])
+    keys = list(by_key)
+    if len(keys) <= FUZZY_MAX:
+        size = {k: sum(counts[v] for v in by_key[k]) for k in keys}
+        rare = lambda a, b: min(size[a], size[b]) <= RARE * max(size[a], size[b])
+        for i, a in enumerate(keys):
+            for b in keys[i + 1:]:
+                if min(len(a), len(b)) >= 5 and a.isalpha() and b.isalpha() and rare(a, b) and _one_edit(a, b):
+                    join(by_key[a][0], by_key[b][0])
+        for v in labels:
+            m = re.match(r"\s*([A-Za-z]{1,6})\.", v)
+            if not m:
+                continue
+            start = m.group(1).lower()
+            fits = [k for k in keys if k != _key(v) and k.startswith(start) and len(k) > len(start)]
+            if len(fits) == 1 and rare(_key(v), fits[0]):
+                join(v, by_key[fits[0]][0])
+    groups = {}
+    for v in labels:
+        groups.setdefault(root(v), []).append(v)
+    out = [sorted(g, key=lambda v: -counts[v]) for g in groups.values() if len(g) > 1]
+    return sorted(out, key=lambda g: -sum(counts[v] for v in g))
 
 
 def _as_number(v):

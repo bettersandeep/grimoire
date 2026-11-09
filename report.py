@@ -186,8 +186,9 @@ def _svg_heatmap(q):
     left = 14 + 7 * max(len(str(v)[:14]) for v in ys)
     cw = (w - left - 4) / len(xs)
     h = top + ch * len(ys)
-    every = max(1, -(-7 * max(len(str(v)[:8]) for v in xs) // max(1, int(cw) - 4)))
-    parts = [f'<text x="{left + cw * i + cw / 2:.1f}" y="14" text-anchor="middle" class="lbl">{html.escape(str(v)[:8])}</text>'
+    cut = lambda v: str(v) if len(str(v)) <= 12 else str(v)[:11] + "…"
+    every = max(1, -(-7 * max(len(cut(v)) for v in xs) // max(1, int(cw) - 4)))
+    parts = [f'<text x="{left + cw * i + cw / 2:.1f}" y="14" text-anchor="middle" class="lbl">{html.escape(cut(v))}</text>'
              for i, v in enumerate(xs) if i % every == 0]
     for j, yv in enumerate(ys):
         parts.append(f'<text x="{left - 8}" y="{top + ch * j + 15}" text-anchor="end" class="lbl">{html.escape(str(yv)[:14])}</text>')
@@ -195,9 +196,9 @@ def _svg_heatmap(q):
             v = cell.get((xv, yv))
             if v is None:
                 continue
-            level = 0.12 + 0.88 * ((v - lo) / ((hi - lo) or 1))  # one hue, light to dark
+            step = round(6 * (v - lo) / ((hi - lo) or 1))  # 7 steps of one blue ramp, light to dark (dark mode: reversed)
             parts.append(f'<rect x="{left + cw * i + 1:.1f}" y="{top + ch * j + 1}" width="{max(1, cw - 2):.1f}" height="{ch - 2}" '
-                         f'rx="2" class="cell" fill-opacity="{level:.2f}"><title>{html.escape(str(xv))}, {html.escape(str(yv))}: '
+                         f'rx="2" class="cell h{step}"><title>{html.escape(str(xv))}, {html.escape(str(yv))}: '
                          f'{html.escape(_fmt(v))}</title></rect>')
     parts.append(f'<text x="{left}" y="{h + 16}" class="lbl">Stronger color = more {html.escape(q["columns"][vi])}: '
                  f'from {html.escape(_fmt(lo))} to {html.escape(_fmt(hi))}.</text>')
@@ -310,7 +311,7 @@ def _svg_bars(q):
         w = max(1, abs(r[vi]) / top * bar_w)
         parts.append(f'<text x="{label_w - 8}" y="{y + 15}" text-anchor="end" class="lbl">'
                      f'{html.escape(str(r[li])[:20])}</text>')
-        parts.append(f'<rect x="{label_w}" y="{y + 3}" width="{w:.1f}" height="{h - 8}" rx="2" class="bar"/>')
+        parts.append(f'<rect x="{label_w}" y="{y + 3}" width="{w:.1f}" height="{h - 8}" rx="2" class="bar{' neg' if r[vi] < 0 else ''}"/>')
         parts.append(f'<text x="{label_w + w + 6:.1f}" y="{y + 15}" class="val">{html.escape(_short(r[vi]))}</text>')
     parts.append("</svg>")
     return "".join(parts)
@@ -394,17 +395,20 @@ def _section(q, caveats=()):
 
 
 CSS = """
-:root{--bg:#f6f7f5;--card:#fff;--fg:#1c2421;--muted:#5d6b66;--line:#dde3e0;--accent:#0f766e;--code:#eef2f0}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1514;--card:#162020;--fg:#e3ebe8;--muted:#93a39e;--line:#26332f;--accent:#3cc4b4;--code:#1d2a28}}
+:root{--bg:#f6f7f5;--card:#fff;--fg:#1c2421;--muted:#5d6b66;--line:#dde3e0;--accent:#0f766e;--code:#eef2f0;--s1:#2a78d6;--neg:#e34948;
+--h0:#cde2fb;--h1:#9ec5f4;--h2:#6da7ec;--h3:#3987e5;--h4:#256abf;--h5:#184f95;--h6:#0d366b}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1514;--card:#162020;--fg:#e3ebe8;--muted:#93a39e;--line:#26332f;--accent:#3cc4b4;--code:#1d2a28;--s1:#3987e5;--neg:#e66767;
+--h0:#0d366b;--h1:#104281;--h2:#184f95;--h3:#256abf;--h4:#3987e5;--h5:#6da7ec;--h6:#b7d3f6}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,system-ui,"Segoe UI",sans-serif;padding:32px 16px}
 main{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
 h1{font-size:1.7rem;margin:0}h2{font-size:1.1rem;margin:0 0 8px}.qid{font:600 .8rem ui-monospace,Menlo,monospace;color:var(--accent);margin-right:6px}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
 .q,.muted{color:var(--muted);font-size:.88rem;margin:4px 0}.kpis{display:flex;flex-wrap:wrap;gap:12px}
 .kpi{border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:140px}.kv{font-size:1.5rem;font-weight:650;font-variant-numeric:tabular-nums}.kl{color:var(--muted);font-size:.8rem}
-svg{width:100%;max-width:620px;margin:6px 0}.bar{fill:var(--accent)}.lbl,.val{fill:var(--fg);font-size:12px}
-.cell{fill:var(--accent)}.pt{fill:var(--accent);stroke:var(--card);stroke-width:2}
-.line{fill:none;stroke:var(--accent);stroke-width:2}.dot{fill:var(--accent)}.grid{stroke:var(--line);stroke-width:1}.lbl{fill:var(--muted)}
+svg{width:100%;max-width:620px;margin:6px 0}.bar{fill:var(--s1)}.bar.neg{fill:var(--neg)}.lbl,.val{fill:var(--fg);font-size:12px}
+.h0{fill:var(--h0)}.h1{fill:var(--h1)}.h2{fill:var(--h2)}.h3{fill:var(--h3)}.h4{fill:var(--h4)}.h5{fill:var(--h5)}.h6{fill:var(--h6)}
+.pt{fill:var(--s1);stroke:var(--card);stroke-width:2}
+.line{fill:none;stroke:var(--s1);stroke-width:2}.dot{fill:var(--s1)}.grid{stroke:var(--line);stroke-width:1}.lbl{fill:var(--muted)}
 .tw{overflow:auto;max-height:360px;margin-top:8px}table{border-collapse:collapse;font-size:.88rem}th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line)}th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
 th{position:sticky;top:0;background:var(--card)}th button{all:unset;cursor:pointer;font-weight:600}th button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 th[aria-sort=ascending] button::after{content:" ▲";font-size:.7em}th[aria-sort=descending] button::after{content:" ▼";font-size:.7em}

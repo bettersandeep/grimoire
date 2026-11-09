@@ -78,7 +78,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | After each reply: which numbers trace to query results, which are derived by simple arithmetic, and which have no source |
 | Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (one value spelled two ways in the result, an incomplete last month, an average of averages, a join that counts rows twice, a rate compared across periods whose row counts differ a lot), which clock day and hour buckets use and a verdict: ready to share, share with caveats, or needs revision |
-| Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, spelling variants ('North' and 'north '), placeholder text ('N/A', '-'), placeholder numbers (9999), negative amounts, future dates, a column with one value; a health score out of 100 that lists every point taken off |
+| Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, one value written differently (case and spaces, a one-letter typo of a rare label, a rare abbreviation such as 'Calif.' for 'California'), placeholder text ('N/A', '-'), placeholder numbers (9999), negative amounts, future dates, a column with one value; a health score out of 100 that lists every point taken off |
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Shape of the data | Which columns are dimensions, metrics and time; metrics that move together; ID columns that join to other attached files, with the share that matches |
 | Explains changes | "Why did revenue drop in March?": the total change split by each category column, with each segment's share |
@@ -122,6 +122,9 @@ You can switch the chart type (bars, columns, line, area, donut) and pick which 
 Tables keep the same decimals in a column and show a bar behind each number.
 **New chart** makes your own chart without a model: pick a file, a measure (count, total, average, smallest, largest), what to group by (a column, or a date per day, month or year) and an optional filter.
 Grimoire writes the SQL, runs it and saves it as a query, so the chart can be checked like any answer.
+Add a second group ("And by") for a **Pivot** table and a heatmap.
+Click a bar, column or slice to look inside it: a new chart with only those rows.
+A chart over time shows the latest value and its change from the period before.
 **Data health** is a score out of 100 for how far you can trust a file's numbers; click it to see every point taken off.
 Small files (up to 1,000,000 rows) are checked as soon as you name them, and the Data page checks larger ones when you open it.
 Checks and charts on the Data page run on your computer and use no model tokens.

@@ -59,6 +59,13 @@ def build(table_sql, types, spec):
             # time and numbers read in order; categories read best from largest to smallest
             tail = " GROUP BY 1 ORDER BY 1" if kind(types[group]) != "text" else " GROUP BY 1 ORDER BY 2 DESC NULLS LAST"
             by = f" per {group}"
+        group2 = spec.get("group2")
+        if group2:  # a second label: one row per pair, for a pivot table or a heatmap
+            if group2 == group:
+                raise BuildError("Pick two different columns.")
+            g2 = column(group2)
+            select.append(f"{g2} AS {g2}")
+            tail, by = " GROUP BY 1, 2 ORDER BY 1, 2", by + f" and {group2}"
     select.append(f"{expr} AS {ident(label)}")
     where, when = "", ""
     f = spec.get("filter") or {}
