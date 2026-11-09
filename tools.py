@@ -8,6 +8,7 @@ from collections import OrderedDict
 
 from . import engine
 from . import guard
+from . import learning
 from . import store
 from . import verify
 
@@ -26,6 +27,9 @@ _state = {"db": None, "engine": None}
 _MAX_SESSIONS, _MAX_VALUES = 50, 50000
 _values = OrderedDict()
 _user_numbers = OrderedDict()
+_messages = OrderedDict()   # session -> the user's last message (for /grimoire explain)
+_last_qid = OrderedDict()   # session -> the last query id it ran
+_guesses = OrderedDict()    # session -> the user's prediction, waiting for the answer
 _last = {"session": None}
 
 
@@ -47,29 +51,98 @@ def remember(session_id, result):
         _last["session"] = session_id or ""
 
 
+def _put(table, session_id, value):
+    key = session_id or ""
+    table[key] = value
+    table.move_to_end(key)
+    while len(table) > _MAX_SESSIONS:
+        table.popitem(last=False)
+
+
 def remember_user_message(session_id, text):
     raws = [c["raw"].split()[0].rstrip("%") for c in verify.extract(text)]
     with _lock:
         _bucket(_user_numbers, session_id).extend(raws)
+        if text:
+            _put(_messages, session_id, str(text)[:500])
+
+
+def record_guess(session_id, clarify_result):
+    """Keep the user's answer to a clarify question while prediction mode is on."""
+    try:
+        responses = json.loads(clarify_result).get("responses") or []
+        answer = responses[0].get("user_response") if responses else None
+    except (ValueError, AttributeError, TypeError):
+        return
+    if isinstance(answer, list):
+        answer = ", ".join(map(str, answer))
+    if answer:
+        with _lock:
+            _put(_guesses, session_id, str(answer)[:200])
+
+
+def learning_state():
+    """(learn, predict) from the saved settings."""
+    db, _eng = _get()
+    learn = store.get_setting(db, "learn", "off") == "on"
+    return learn, learn and store.get_setting(db, "predict", "off") == "on"
+
+
+def used_grimoire(session_id):
+    with _lock:
+        return (session_id or "") in _values
 
 
 def check_reply(text, session_id=None):
-    """Footer for a final reply, or "" when Grimoire was not used or the reply has no numbers."""
+    """Text to add after a final reply: the number check, and in learning mode a card and the
+    prediction result. "" when Grimoire was not used in this session."""
     with _lock:
         key = session_id if session_id in _values else (_last["session"] if not session_id else None)
         values = list(_values.get(key, [])) if key is not None else []
         ignore = list(_user_numbers.get(session_id or "", []))
-    cited = re.findall(r"\bq(\d+)\b", text or "", re.I)
-    if cited:
-        db, _eng = _get()
-        for qid in dict.fromkeys(cited):
-            q = store.get_query(db, qid)
-            if q:
-                values.extend(verify.numeric_values(q["rows"]))
+        last_qid = _last_qid.get(key) if key is not None else None
+    cited = list(dict.fromkeys(re.findall(r"\bq(\d+)\b", text or "", re.I)))
+    if not values and not cited:
+        return ""  # Grimoire was not used here: do not open the database
+    db, _eng = _get()
+    for qid in cited:
+        q = store.get_query(db, qid)
+        if q:
+            values.extend(verify.numeric_values(q["rows"]))
     if not values:
         return ""
     sourced, unsourced = verify.check(text, values, ignore=ignore)
-    return verify.footer(sourced, unsourced)
+    out = verify.footer(sourced, unsourced)
+    learn, predict = learning_state()
+    if predict:
+        with _lock:
+            guess = _guesses.pop(session_id or "", None)
+        if guess:
+            main = next((c for c in verify.extract(text) if c["raw"] in sourced), None)
+            line, close = learning.guess_feedback(guess, main["raw"] if main else None,
+                                                  main["value"] if main else None)
+            if line:
+                stats = store.get_json(db, "predictions", {"asked": 0, "close": 0})
+                if close is not None:
+                    stats["asked"] += 1
+                    stats["close"] += int(close)
+                    store.set_json(db, "predictions", stats)
+                out += (f"\n\n---\nPrediction\n{line} "
+                        f"Score: {stats['close']} of {stats['asked']} guesses within 10%.")
+    qid = f"q{cited[-1]}" if cited else last_qid
+    if learn and qid:
+        q = store.get_query(db, qid)
+        if q:
+            issues = []
+            for name in q["datasets"]:
+                issues += store.get_json(db, f"issues:{name}", [])
+            seen = store.get_json(db, "seen_concepts", [])
+            card, key_ = learning.card(q["sql"], q["id"], issues, seen)
+            if card:
+                out += card
+                if key_:
+                    store.set_json(db, "seen_concepts", (seen + [key_])[-8:])
+    return out
 
 
 def open_db():
@@ -185,6 +258,7 @@ def profile(args, session_id=None, **kwargs):
             compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
         store.save_columns(db, dataset, ref, saved)
         issues = eng.issues(source, rows)
+        store.set_json(db, f"issues:{dataset}", issues[:10])
         remember(session_id, [row[2:] for row in compact])
         remember(session_id, issues)
         result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
@@ -209,9 +283,13 @@ def query(args, session_id=None, **kwargs):
         db, eng = _get()
         sql = args.get("sql", "")
         columns, rows, truncated = eng.query(sql)
+        with _lock:
+            question = _messages.get(session_id or "")
         qid = store.save_query(db, session_id, sql, args.get("purpose"), columns, rows, truncated,
-                               datasets=_datasets_in(sql, eng.datasets))
+                               datasets=_datasets_in(sql, eng.datasets), question=question)
         remember(session_id, rows)
+        with _lock:
+            _put(_last_qid, session_id, qid)
         result = {"id": qid, "columns": columns, "rows": rows, "note": UNTRUSTED}
         if truncated:
             result["truncated"] = f"Only the first {engine.MAX_ROWS} rows are shown. Aggregate in SQL instead."
@@ -256,8 +334,8 @@ def _datasets_in(sql, datasets):
 
 def forget_values():
     with _lock:
-        _values.clear()
-        _user_numbers.clear()
+        for table in (_values, _user_numbers, _messages, _last_qid, _guesses):
+            table.clear()
 
 
 def _merge_lines(merges):

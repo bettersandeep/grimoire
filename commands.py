@@ -3,11 +3,14 @@
 import re
 from pathlib import Path
 
-from . import store, tools
+from . import learning, store, tools
 
 HELP = """Commands:
   /grimoire                          status
   /grimoire sql q12                  the SQL and result behind a query id
+  /grimoire explain q12              how your question became that SQL
+  /grimoire learn on | off           learning mode: a short lesson after data answers
+  /grimoire learn predict on | off   guess the answer before you see it (needs learning mode)
   /grimoire rejects [dataset]        malformed lines skipped when a file was read
   /grimoire merges [dataset]         merge rules, applied and waiting for approval
   /grimoire merges approve | reject  apply or drop the merges waiting for approval
@@ -32,6 +35,10 @@ def run(raw_args="", **kwargs):
             return _status(db, eng)
         if cmd == "sql" and rest:
             return _sql(db, rest[0])
+        if cmd == "explain" and rest:
+            return _explain(db, rest[0])
+        if cmd == "learn":
+            return _learn(db, rest)
         if cmd == "rejects":
             return _rejects(eng, rest[0] if rest else None)
         if cmd == "merges" and rest[:1] == ["approve"]:
@@ -94,8 +101,36 @@ def _status(db, eng):
             lines.append(f"  {name}  {kind}  {path}{state}")
     else:
         lines.append("Data files: none yet. Ask a question about a CSV, JSON, Parquet or SQLite file.")
-    lines.append("Learning mode: coming soon")
+    learn, predict = tools.learning_state()
+    stats = store.get_json(db, "predictions", {"asked": 0, "close": 0})
+    score = f" ({stats['close']} of {stats['asked']} guesses within 10%)" if predict and stats["asked"] else ""
+    lines.append(f"Learning mode: {'on' if learn else 'off'} · Predictions: {'on' if predict else 'off'}{score}")
     return "\n".join(lines + ["", HELP])
+
+
+def _learn(db, rest):
+    if rest in (["on"], ["off"]):
+        store.set_setting(db, "learn", rest[0])
+        if rest[0] == "on":
+            return ("Learning mode is on. After answers about your data you get one SQL idea and one question "
+                    "worth asking. Type /grimoire learn predict on to guess answers first.")
+        return "Learning mode is off. Answers have no lessons or predictions."
+    if rest in (["predict", "on"], ["predict", "off"]):
+        if rest[1] == "on" and store.get_setting(db, "learn", "off") != "on":
+            return "Turn on learning mode first: /grimoire learn on"
+        store.set_setting(db, "predict", rest[1])
+        return ("Predictions are on. Before an answer, you are asked to guess the main number."
+                if rest[1] == "on" else "Predictions are off.")
+    learn, predict = tools.learning_state()
+    return (f"Learning mode: {'on' if learn else 'off'} · Predictions: {'on' if predict else 'off'}\n"
+            "Change with /grimoire learn on|off and /grimoire learn predict on|off")
+
+
+def _explain(db, qid):
+    q = store.get_query(db, qid)
+    if q is None:
+        return f"No query {qid}."
+    return f"{q['id']}: {q['purpose'] or ''}".rstrip(": ") + "\n" + learning.explain(q["sql"], q["question"], q["columns"])
 
 
 def _sql(db, qid):

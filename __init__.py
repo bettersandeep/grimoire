@@ -1,6 +1,8 @@
 """Grimoire: learn and explore data with fewer tokens."""
 
-from . import commands, guard, schemas, tools
+from pathlib import Path
+
+from . import commands, guard, learning, schemas, tools
 
 _HANDLERS = {
     "grimoire_attach": tools.attach,
@@ -43,9 +45,26 @@ def register(ctx):
     def before_turn(user_message=None, session_id=None, **kwargs):
         tools.remember_user_message(session_id, user_message)
         hint = guard.data_file_hint(user_message)
-        return {"context": hint} if hint else None
+        parts = [hint] if hint else []
+        if hint or tools.used_grimoire(session_id):
+            try:
+                if tools.learning_state()[1]:
+                    parts.append(learning.PREDICT_CONTEXT)
+            except Exception:
+                pass  # a settings problem must not block the turn
+        return {"context": "\n".join(parts)} if parts else None
 
     ctx.register_hook("pre_llm_call", before_turn)
+
+    # Prediction mode: the user's answer to the clarify question is the guess.
+    def after_tool(tool_name=None, result=None, session_id=None, **kwargs):
+        if tool_name == "clarify" and result:
+            tools.record_guess(session_id, result)
+
+    ctx.register_hook("post_tool_call", after_tool)
+
+    ctx.register_skill("explore-data", Path(__file__).resolve().parent / "skills" / "explore-data" / "SKILL.md",
+                       description="Answer questions about CSV, JSON, Parquet or SQLite files with Grimoire.")
 
     # Append-only, so the reply keeps streaming; the footer prints after it (no hold_stream).
     def after_reply(response_text=None, session_id=None, **kwargs):
