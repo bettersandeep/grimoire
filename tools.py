@@ -440,6 +440,10 @@ def merge(args, **kwargs):
         return _err(f"merge failed: {exc}")
 
 
+_CHANGE = re.compile(r"\b(why|drop(ped)?|fell|fall|rose|rise|grew|grow|increase[sd]?|decrease[sd]?|declin\w*|"
+                     r"chang\w*|jump\w*|spike\w*|driv\w*|explain)\b", re.I)
+
+
 def auto_attach(user_message, session_id=None, cwd=None):
     """Attach the data files a message names, in plugin code, and return context that lets the model
     answer with one grimoire_query call (no tool loading, no attach round trip). None when no file is
@@ -477,6 +481,9 @@ def auto_attach(user_message, session_id=None, cwd=None):
     if saved:
         lines.append("Saved metrics (write name() in SQL; Grimoire fills in the definition): "
                      + "; ".join(f"{n}() = {e}" for n, e in saved.items()))
+    if _CHANGE.search(user_message or ""):  # only for "why did it change" questions: fewer tokens otherwise
+        lines.append('For why a number changed between two periods, use tool_call with name "grimoire_drivers" '
+                     'and arguments {"dataset", "measure", "time_column", "before", "after"} instead.')
     return (
         "[Grimoire] Data files are attached:\n" + "\n".join(lines) + "\n"
         "Answer with one call: tool_call with name \"grimoire_query\" and arguments "

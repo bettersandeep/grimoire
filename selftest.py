@@ -192,6 +192,8 @@ def test_auto_attach(tmp, db):
     assert 'tool_call with name "grimoire_query"' in ctx, ctx
     assert call(tools.query, sql="SELECT sum(visits) FROM visits")["rows"] == [[12]]
     assert tools.auto_attach("hello there", "auto") is None
+    assert "grimoire_drivers" not in ctx  # plain questions do not pay for the drivers hint
+    assert "grimoire_drivers" in tools.auto_attach("Why did visits drop in shop/visits.csv?", "auto", cwd=str(tmp))
     hint = tools.auto_attach("what about nope/missing.csv?", "auto", cwd=str(tmp))
     assert hint.startswith("[Grimoire] Data file mentioned: nope/missing.csv"), hint
     # an unchanged file is not reopened; a changed one is
