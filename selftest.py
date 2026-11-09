@@ -316,6 +316,10 @@ def test_analysis_checks(tmp, db):
     assert any("no time zone" in a for a in pkg.audit.assumptions(q, eng_of()))
     q = store.get_query(db, run("SELECT count(*) FROM visits")["id"])
     assert pkg.audit.assumptions(q, eng_of()) == []
+    # a rate typed into the SQL is an assumption; unit factors are not
+    q = store.get_query(db, run("SELECT round(count(*) / 100.0 / 86.5, 2) AS usd, count(*) * 1000 AS m FROM visits")["id"])
+    assert "uses 86.5, written into the SQL, not taken from the data" in pkg.audit.pitfalls(q, eng_of())
+    assert pkg.audit._constants("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000") == ["0.18"]
 
 
 def eng_of():

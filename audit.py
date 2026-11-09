@@ -26,6 +26,7 @@ _DAY = re.compile(r"date_trunc\(\s*'(?:day|hour|week)'\s*,\s*\"?(\w+)\"?\s*\)|\b
 # A rate: divided by a count or sum (not by 100 for units), or named like one.
 _RATIO = re.compile(r"/\s*\(?\s*(?:nullif\s*\(\s*)?(?:count|sum)\s*\(|\b(?:pct|percent\w*|share|rate|ratio)\b", re.I)
 _IN = re.compile(r"^(?:CAST\(\s*)?\"?(\w+)\"?(?:\s+AS\s+VARCHAR\s*\))?\s+IN\s*\(((?:\s*'[^',]*'\s*,?)+)\)$", re.I)
+_FACTOR = re.compile(r"[*/]\s*\(?\s*(\d+(?:\.\d+)?)\b(?!\s*\))?|\b(\d+(?:\.\d+)?)\s*\*")
 _NOT_NULL = re.compile(r'^\(?\s*"?(\w+)"?\s+IS\s+NOT\s+NULL\s*\)?$', re.I)
 
 
@@ -102,6 +103,19 @@ def assumptions(q, eng):
     return out
 
 
+def _constants(select):
+    """Numbers the SQL multiplies or divides by, other than unit factors (10, 100, 1000 ...) and 1 or 2."""
+    found = []
+    for m in _FACTOR.finditer(select):
+        raw = m.group(1) or m.group(2)
+        v = float(raw)
+        if v in (0, 1, 2) or (v == int(v) and str(int(v)).strip("0") == "1"):
+            continue  # unit changes and halves are not assumptions
+        if raw not in found:
+            found.append(raw)
+    return found[:3]
+
+
 def _time_zone(q, eng):
     """Say which clock day and hour buckets use, when the query buckets a timestamp by day or hour."""
     cols = {next(g for g in m.groups() if g) for m in _DAY.finditer(q["sql"])}
@@ -138,6 +152,9 @@ def pitfalls(q, eng):
         dup_r = _count(eng, f'SELECT count(*) - count(DISTINCT "{key_r}") FROM {right}')
         if dup_l and dup_r:
             out.append(f"the join on {key_l} matches several rows on both sides, so rows can be counted more than once")
+    constants = _constants(outer_select)
+    if constants:
+        out.append(f"uses {', '.join(constants)}, written into the SQL, not taken from the data")
     for pattern, kind in ((_MONTH, "month"), (_YEAR, "year")):
         m = pattern.search(sql)
         if m:
