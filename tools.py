@@ -405,8 +405,10 @@ def auto_attach(user_message, session_id=None, cwd=None):
         "[Grimoire] Data files are attached:\n" + "\n".join(lines) + "\n"
         "Answer with one call: tool_call with name \"grimoire_query\" and arguments "
         "{\"sql\": \"<one DuckDB SELECT>\", \"purpose\": \"<what it answers>\"}. Compute every number you "
-        "will state in that SQL, then cite the query id like [q12]. Do not read the file or parse it with "
-        "code. Use grimoire_profile only if you need to check data quality."
+        "will state in that SQL, rounded as you will show it, then cite the query id like [q12]. Do not read "
+        "the file or parse it with code. Use grimoire_profile only if you need to check data quality.\n"
+        "Answer briefly: the numbers asked for with their query id, and at most one sentence of context. "
+        "Use a short list for several values; no tables, no notes and no SQL unless the user asks."
     )
 
 
