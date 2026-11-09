@@ -114,6 +114,7 @@ class Engine:
         self._tables = {}   # dataset name -> list of table references
         self._merges = {}   # dataset name -> {(table, column): {from_value: to_value}}
         self._rejects = {}  # (path, mtime, size) -> (count, first rejected lines)
+        self._opened = {}   # dataset name -> (path, mtime, size) when its view or copy was built
         self._con = None
         # ponytail: one lock for all sessions; per-connection cursors if gateway concurrency hurts.
         self._lock = threading.RLock()
@@ -165,6 +166,14 @@ class Engine:
                 self._rebuild()
                 raise EngineError(f"Cannot read {path}: {exc}") from exc
         return dataset, kind
+
+    def fresh(self, dataset):
+        """True when the dataset's file has not changed since it was opened."""
+        path, _kind = self._sources[dataset]
+        try:
+            return self._opened.get(dataset) == _file_key(path)
+        except OSError:
+            return False
 
     def forget(self, dataset):
         with self._lock:
@@ -231,6 +240,7 @@ class Engine:
         con.execute("SET allowed_paths = ?", [readable])
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
+        self._opened = {name: _file_key(path) for name, (path, _kind) in self._sources.items()}
         old, self._con, self._tables = self._con, con, tables
         if old is not None:
             old.close()

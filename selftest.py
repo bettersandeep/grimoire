@@ -181,6 +181,27 @@ def test_learning(tmp, db):
     assert [p[0] for p in parts] == ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"], parts
 
 
+def test_auto_attach(tmp, db):
+    tools.setup(db=db, eng=None)
+    (tmp / "shop").mkdir(exist_ok=True)
+    f = tmp / "shop" / "visits.csv"
+    f.write_text("day,visits\n2026-01-01,5\n2026-01-02,7\n")
+    ctx = tools.auto_attach("How many visits in total in shop/visits.csv?", "auto", cwd=str(tmp))
+    assert "is table \"visits\" (2 rows): day DATE, visits BIGINT" in ctx, ctx
+    assert 'tool_call with name "grimoire_query"' in ctx, ctx
+    assert call(tools.query, sql="SELECT sum(visits) FROM visits")["rows"] == [[12]]
+    assert tools.auto_attach("hello there", "auto") is None
+    hint = tools.auto_attach("what about nope/missing.csv?", "auto", cwd=str(tmp))
+    assert hint.startswith("[Grimoire] Data file mentioned: nope/missing.csv"), hint
+    # an unchanged file is not reopened; a changed one is
+    eng = tools._get()[1]
+    before = eng._con
+    tools.auto_attach("again shop/visits.csv", "auto", cwd=str(tmp))
+    assert eng._con is before
+    f.write_text("day,visits\n2026-01-01,5\n2026-01-02,7\n2026-01-03,1\n")
+    assert "(3 rows)" in tools.auto_attach("and shop/visits.csv now", "auto", cwd=str(tmp))
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -320,6 +341,7 @@ def main():
     test_data_quality(tmp, db)
     test_security(tmp, db)
     test_learning(tmp, db)
+    test_auto_attach(tmp, db)
     print("selftest passed")
 
 
