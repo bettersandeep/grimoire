@@ -729,6 +729,10 @@ def test_review_fixes(tmp, db):
     s_, d_, u_, loose = verify.check_detail("Growth was 23.7%, the share 41.2% and the average 18.4.", random_vals)
     assert not u_ and {"23.7%", "41.2%"} <= set(loose), (s_, d_, u_, loose)  # 18.4 is 1840 / 100 here: a unit change
     assert pkg.audit.review([], None, [], loose)[0] == "share with caveats"
+    # SQL that computes millions (29.05) and a reply that writes "$29.05M": the number traces as written
+    musd = verify.numeric_values([["North", 29.05, 15025], ["north ", 3.04, 1609], ["N. Region", 0.94, 493]])
+    s_, d_, u_ = verify.check("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
+    assert s_ == ["29.05M", "3.04M", "0.94M"] and u_ == ["33.03M"], (s_, d_, u_)  # a 3-number total belongs in SQL
     # C-7: only bracketed ids are citations
     assert tools.check_reply("Apple's Q3 revenue rose 12%.", "never-used") == ""
     # C-8 is covered in test_data_plugin (regions_2). C-9: a deleted file does not break other attaches

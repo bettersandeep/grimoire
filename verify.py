@@ -70,6 +70,9 @@ def extract(text):
             "value": number * mult,
             "tol": 0.5 * 10 ** -decimals * mult,
             "percent": unit in ("%", "percent"),
+            # "$29.05M" also matches 29.05 as written: SQL often computes in millions (revenue_musd)
+            "written": number if mult != 1.0 else None,
+            "written_tol": 0.5 * 10 ** -decimals,
         })
     return claims
 
@@ -140,7 +143,8 @@ def check_detail(text, values, ignore=(), totals=()):
     claims = [c for c in extract(text) if c["raw"].split()[0].rstrip("%").replace(",", "") not in ignored]
     sourced, rest = [], []
     for claim in claims:
-        ok = _matches(pool, claim["value"], claim["tol"], claim["percent"])
+        ok = _matches(pool, claim["value"], claim["tol"], claim["percent"]) or (
+            claim.get("written") is not None and _near(pool, claim["written"], claim["written_tol"]))
         (sourced if ok else rest).append(claim)
     shown = {c["value"] for c in claims if c in sourced}
     # powers of ten are skipped as claims, but "964 of 1000 rows" still uses 1000 as a sourced number
