@@ -469,6 +469,7 @@ def test_charts():
     assert kind(["bucket", "n"], [[0, 5], [10, 9], [20, 4], [30, 1]]) == "histogram"
     assert kind(["bucket", "n"], [[0, 5], [10, 9], [25, 4], [30, 1], [40, 2]]) == "scatter"  # uneven steps
     assert kind(["fare", "tip"], [[3.5, 1], [9, 2], [12, 2.5], [30, 6], [44, 9]]) == "scatter"
+    assert kind(["fare", "avg_tip"], [[3, 1.2], [4, 1.5], [5, 1.9], [6, 2.1], [7, 2.4]]) == "scatter"  # even x, but not counts
     assert kind(["month", "n"], [["2026-01", 1], ["2026-02", 2], ["2026-03", 3]]) == "line"
     assert kind(["region", "n"], [["North", 1], ["South", 2]]) == "bars"
     assert kind(["n"], [[1]]) is None
@@ -479,6 +480,10 @@ def test_charts():
     evil = {"id": "q2", "columns": ["a<b>", "n"], "rows": [["<script>", 1], ["x", 2]]}
     assert "<script>" not in report.chart_svg(evil) and "&lt;script&gt;" in report.chart_svg(evil)
     assert report.chart_svg({"id": "q3", "columns": ["a", "b"], "rows": [[0, 1], [1, 2], [2, 3]]}).count('class="bar"') == 3
+    d = report.chart_data(q)
+    assert d["kind"] == "heatmap" and d["ys"] == ["Monday", "Tuesday", "Sunday"] and len(d["xs"]) == 24 and len(d["cells"]) == 72
+    assert report.chart_data({"columns": ["b", "n"], "rows": [[0, 5], [10, 9], [20, 4]]})["step"] == 10
+    assert report.chart_data({"columns": ["r", "n"], "rows": [["a", 1], ["b", 2]]}) is None  # bars: drawn by the page
     assert report._short(91000000.0) == "91M" and report._short(950.5) == "950.50"
     # axis labels never touch, and the last one is always drawn
     for n in (2, 6, 13, 30, 120):
