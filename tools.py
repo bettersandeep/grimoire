@@ -142,7 +142,9 @@ def check_reply(text, session_id=None):
         values = list(_values.get(key, [])) if key is not None else []
         ignore = list(_user_numbers.get(session_id or "", []))
         last_qid = _last_qid.get(key) if key is not None else None
-    cited = list(dict.fromkeys(re.findall(r"\bq(\d+)\b", text or "", re.I)))
+    # only bracketed ids like [q12] or [q3, q4]: "Apple's Q3" is not a citation
+    cited = list(dict.fromkeys(n for group in re.findall(r"\[\s*(q\d+(?:\s*,\s*q\d+)*)\s*\]", text or "")
+                               for n in re.findall(r"q(\d+)", group)))
     if not values and not cited:
         return ""  # Grimoire was not used here: do not open the database
     db, eng = _get()
@@ -155,13 +157,13 @@ def check_reply(text, session_id=None):
             totals.extend(_column_totals(q["rows"]))
     if not values:
         return ""
-    sourced, derived, unsourced = verify.check(text, values, ignore=ignore, totals=totals)
+    sourced, derived, unsourced, loose = verify.check_detail(text, values, ignore=ignore, totals=totals)
     out = verify.footer(sourced, unsourced, derived)
     if out:
         audited = cited_queries or [q for q in [store.get_query(db, last_qid)] if q] if last_qid else cited_queries
         if audited:
             try:
-                judged, lines = audit.review(audited, eng, unsourced)
+                judged, lines = audit.review(audited, eng, unsourced, loose)
                 out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
             except Exception:
                 pass  # the audit is extra; never lose the number check because of it
@@ -236,7 +238,8 @@ def _get():
             for name, path, _kind in store.datasets(_state["db"]):
                 if os.path.isfile(path):
                     try:
-                        eng.attach(path, name, merges=store.merges(_state["db"], name))
+                        eng.attach(path, name, merges=store.merges(_state["db"], name),
+                                   allow_private=_options["allow_private_folders"])
                     except engine.EngineError:
                         pass  # the file changed or broke; the catalog still lists it as missing
             _state["engine"] = eng
@@ -277,22 +280,33 @@ def _sql_ref(ref):
     return ".".join(engine.ident(part) for part in ref.split(".", 1))
 
 
+def _free_name(db, eng, wanted, real):
+    """wanted, or wanted_2, wanted_3...: 2025/sales.csv and 2026/sales.csv must not share one table.
+    A name whose old file is gone is reused, so a moved file replaces its old entry."""
+    taken = {n: p for n, p, _k in store.datasets(db)} | {n: p for n, (p, _k) in eng.datasets.items()}
+    there = lambda p: os.path.exists(p) or (engine.is_many(p) and bool(engine.files_of(p)))
+    name, n = wanted, 1
+    same = lambda p: p == real or set(engine.files_of(p)) == set(engine.files_of(real))  # folder vs pattern
+    while name in taken and not same(taken[name]) and there(taken[name]):
+        n += 1
+        name = f"{wanted}_{n}"
+    return name
+
+
 def attach(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
         path_arg = args.get("path", "")
-        folder = guard.private_folder(os.path.expanduser(str(path_arg)))
-        if folder and not _options["allow_private_folders"]:
-            return _err(f"Grimoire does not open files in ~/{folder}, which holds private app data or "
-                        "credentials. Copy the file to another folder, or ask the user to set "
-                        "plugins.entries.grimoire.settings.allow_private_folders: true.")
-        wanted = engine.dataset_name(path_arg, args.get("name"))
         real = os.path.realpath(os.path.expanduser(str(path_arg)))
+        wanted = engine.dataset_name(path_arg, args.get("name"))
+        if not args.get("name"):
+            wanted = _free_name(db, eng, wanted, real)
         current = eng.datasets.get(wanted)
         if current and current[0] == real and eng.fresh(wanted):
             name, kind = wanted, current[1]  # already open and unchanged: no rebuild
         else:
-            name, kind = eng.attach(path_arg, args.get("name"), merges=store.merges(db, wanted))
+            name, kind = eng.attach(path_arg, wanted, merges=store.merges(db, wanted),
+                                    allow_private=_options["allow_private_folders"])
         path = eng.datasets[name][0]
         store.save_dataset(db, name, path, kind)
         tables = []
@@ -323,8 +337,9 @@ def attach(args, session_id=None, **kwargs):
         if skipped:
             result["skipped_lines"] = {
                 "count": skipped,
-                "first": [f"{where}: {err}: {text}" for where, err, text in first[:5]],
-                "note": "These lines are malformed and are not in any query result. Tell the user.",
+                "first": [f"{where}: {engine.cut(str(err), 80)}: {engine.cut(str(text), 120)}" for where, err, text in first[:5]],
+                "note": "These lines are malformed: their values are missing from query results, "
+                        "though count(*) can still count them. Tell the user.",
             }
         rules = _merge_lines(eng.merges(name))
         if rules:
@@ -342,6 +357,11 @@ def attach(args, session_id=None, **kwargs):
 
 def _quality(db, eng, dataset, ref):
     """Profile one table, find data problems and score its health; saves all three for the Desktop page."""
+    with eng._lock:  # a big table is profiled on a shared temp sample; hold it until the checks are done
+        return _quality_locked(db, eng, dataset, ref)
+
+
+def _quality_locked(db, eng, dataset, ref):
     rows, source = eng.profile(_sql_ref(ref))
     compact, saved = [], []
     for r in rows:
@@ -597,7 +617,8 @@ def auto_attach(user_message, session_id=None, cwd=None):
             continue
         for t in result["tables"]:
             cols = t["columns"]
-            shown = ", ".join(cols[:60]) + (f", ... ({len(cols)} columns)" if len(cols) > 60 else "")
+            # names longer than 80 characters are cut here (the full name is in grimoire_attach's result)
+            shown = ", ".join(engine.cut(c, 80) for c in cols[:60]) + (f", ... ({len(cols)} columns)" if len(cols) > 60 else "")
             lines.append(f"- {name} is table {_sql_ref(t['table'])} ({t['rows']:,} rows): {shown}")
         if result.get("files"):
             lines.append(f"  {result['files']} files in one table; the filename column says which file a row came from.")
@@ -609,7 +630,7 @@ def auto_attach(user_message, session_id=None, cwd=None):
             lines.append(f"  spelling variants of one value in {v}; say so, and offer to combine them with grimoire_merge.")
         db, _eng = _get()
         for tbl, col, text in store.notes(db, result["dataset"]):
-            lines.append(f"  note on {col}: {text}")
+            lines.append(f"  note on {engine.cut(col, 80)}: {engine.cut(text, 300)}")
     if not lines:
         return guard.data_file_hint(user_message)
     saved = store.metrics(_get()[0])

@@ -64,11 +64,10 @@ _CONCEPTS = [
      "does the arithmetic, so the number is exact and repeatable."),
 ]
 
-LEARN_KEYS = ("learn", "predict")
-
-
 def clauses(sql):
     """[(clause name, clause text)] for the top level of a query (parentheses are skipped over)."""
+    # drop comments first (strings stay): on one line, a -- comment would hide the conditions after it
+    sql = re.sub(r"('(?:[^']|'')*')|--[^\n]*|/\*.*?\*/", lambda m: m.group(1) or " ", sql, flags=re.S)
     text = re.sub(r"\s+", " ", sql.strip().rstrip(";"))
     depth, starts = 0, []
     i = 0

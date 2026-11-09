@@ -11,6 +11,8 @@ import importlib.util
 import re
 import sys
 import threading
+from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
@@ -41,8 +43,9 @@ engine = _load("engine")
 builder = _load("builder")
 tools = _load("tools")
 router = APIRouter()
-_engines = {}  # dataset -> Engine with only that file; ponytail: kept for the process lifetime, few files per user
-_engine_lock = threading.Lock()
+PAGE_ENGINES = 4  # files with an open engine on the page; the least recently used one closes first
+_engines = OrderedDict()  # dataset -> [Engine or None, its lock]
+_engines_lock = threading.Lock()  # guards the dict only; each file's work holds that file's own lock
 
 
 def _db():
@@ -164,47 +167,54 @@ def forget(name: str):
     return summary()
 
 
-def _engine_for(db, name):
-    """The page's engine for one saved file, rebuilt when the file or its merges change."""
+@contextmanager
+def _page_engine(db, name):
+    """The page's engine for one saved file, rebuilt when the file or its merges change. Work on one file
+    waits only for other work on that file, so a slow check never blocks the rest of the page."""
     paths = {n: p for n, p, _k in store.datasets(db)}
     if name not in paths:
         raise HTTPException(404, f"No file named {name}.")
-    merges = store.merges(db, name)
-    eng = _engines.get(name)
-    if eng is None or eng.datasets[name][0] != paths[name] or not eng.fresh(name) or eng.merges(name) != merges:
-        eng = engine.Engine()
-        eng.attach(paths[name], name, merges=merges)
-        _engines[name] = eng
-    return eng
+    with _engines_lock:
+        entry = _engines.setdefault(name, [None, threading.Lock()])
+        _engines.move_to_end(name)
+        for old in list(_engines)[:-PAGE_ENGINES]:
+            if _engines[old][1].acquire(blocking=False):  # never close an engine that is in use
+                _engines.pop(old)[1].release()
+    with entry[1]:
+        merges = store.merges(db, name)
+        eng = entry[0]
+        if eng is None or eng.datasets[name][0] != paths[name] or not eng.fresh(name) or eng.merges(name) != merges:
+            eng = engine.Engine(memory_share=PAGE_ENGINES * 2)
+            eng.attach(paths[name], name, merges=merges)  # refuses private folders, like the chat
+            entry[0] = eng
+        yield eng
 
 
 @router.post("/datasets/{name}/check")
 def check(name: str):
     """Find data problems and score the file's health; the page asks for this for files not checked yet."""
     db = _db()
-    with _engine_lock:
-        try:
-            eng = _engine_for(db, name)
+    try:
+        with _page_engine(db, name) as eng:
             tables = eng.tables(name)
             if len(tables) != 1:
                 raise HTTPException(400, f"{name} has {len(tables)} tables; ask in a chat to check one.")
             tools._quality(db, eng, name, tables[0])
-        except engine.EngineError as exc:
-            raise HTTPException(400, str(exc)) from exc
+    except engine.EngineError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return summary()
 
 
 @router.get("/datasets/{name}/columns")
 def columns(name: str):
     db = _db()
-    with _engine_lock:
-        try:
-            eng = _engine_for(db, name)
+    try:
+        with _page_engine(db, name) as eng:
             return {"tables": [{"table": ref, "columns": [{"name": c, "type": t, "kind": builder.kind(t)}
                                                           for c, t in eng.schema(tools._sql_ref(ref))]}
                                for ref in eng.tables(name)]}
-        except engine.EngineError as exc:
-            raise HTTPException(400, str(exc)) from exc
+    except engine.EngineError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/charts")
@@ -212,9 +222,8 @@ def chart(body: dict = Body(...)):
     """Build, run and save a chart query from the page's choices; returns its query id."""
     db = _db()
     name = str(body.get("dataset") or "")
-    with _engine_lock:
-        try:
-            eng = _engine_for(db, name)
+    try:
+        with _page_engine(db, name) as eng:
             refs = eng.tables(name)
             ref = body.get("table") or refs[0]
             if not isinstance(ref, str) or ref not in refs:
@@ -222,6 +231,6 @@ def chart(body: dict = Body(...)):
             table = tools._sql_ref(ref)
             sql, purpose = builder.build(table, dict(eng.schema(table)), body)
             cols, rows, truncated = eng.query(sql)
-        except (engine.EngineError, builder.BuildError) as exc:
-            raise HTTPException(400, str(exc)) from exc
+    except (engine.EngineError, builder.BuildError) as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"id": store.save_query(db, "desktop", sql, purpose, cols, rows, truncated, datasets=[name])}

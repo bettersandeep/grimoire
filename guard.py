@@ -4,15 +4,32 @@ import os
 import re
 from pathlib import Path
 
-DATA_SUFFIXES = {".csv", ".tsv", ".parquet", ".pq", ".sqlite", ".sqlite3", ".db"}
+# Not .json or .txt: those are often config and logs, which the read guard must not block.
+DATA_SUFFIXES = {".csv", ".tsv", ".parquet", ".pq", ".sqlite", ".sqlite3", ".db", ".jsonl", ".ndjson"}
 DEFAULT_LIMIT_KB = 256
-_DATA_FILE = re.compile(
-    r"[^\s'\"`<>()]*?[\w*?\]-]\.(?:csv|tsv|parquet|pq|sqlite3?|db|jsonl|ndjson)(?:\.gz|\.zst)?\b", re.IGNORECASE)
+_SPLIT = re.compile(r"[\s'\"`<>()]+")
+_DATA_END = re.compile(r"[\w*?\]-]\.(?:csv|tsv|parquet|pq|sqlite3?|db|jsonl|ndjson)(?:\.gz|\.zst)?$", re.IGNORECASE)
+MAX_TOKEN = 1024  # a longer "word" is not a path; skipping it keeps the per-message cost linear
 
 
 def data_file_mentions(user_message):
-    """Data file names or paths in a message, in order, at most 3."""
-    return list(dict.fromkeys(m.group(0).rstrip(".,;:?!") for m in _DATA_FILE.finditer(user_message or "")))[:3]
+    """Data file names or paths in a message, in order, at most 3. Splits into words first, then checks
+    each word's ending: one pass, so a 40k-character word costs no more than its length."""
+    found = []
+    for word in _SPLIT.split(user_message or ""):
+        word = word.rstrip(".,;:?!")
+        if word and len(word) <= MAX_TOKEN and _DATA_END.search(word):
+            found.append(word)
+    return list(dict.fromkeys(found))[:3]
+
+
+def is_data_path(path):
+    """True for a data file name, also compressed: sales.csv, events.jsonl.gz. Not log.txt.gz."""
+    name = Path(path).name.lower()
+    for packed in (".gz", ".zst"):
+        if name.endswith(packed):
+            name = name[: -len(packed)]
+    return Path(name).suffix in DATA_SUFFIXES
 
 
 def data_file_hint(user_message):
@@ -40,10 +57,17 @@ def private_folder(real_path, home=None):
         rel = Path(os.path.realpath(real_path)).relative_to(home)
     except ValueError:
         return None
-    text = rel.as_posix()
-    if any(text == ok or text.startswith(ok + "/") for ok in _PRIVATE_OK):
+    text = rel.as_posix().casefold()  # macOS and Windows file names ignore case: ~/.HERMES is ~/.hermes
+    if any(text == ok.casefold() or text.startswith(ok.casefold() + "/") for ok in _PRIVATE_OK):
         return None
-    return rel.parts[0] if rel.parts and rel.parts[0] in _PRIVATE else None
+    top = rel.parts[0].casefold() if rel.parts else ""
+    return next((p for p in _PRIVATE if p.casefold() == top), None)
+
+
+def private_error(folder):
+    return (f"Grimoire does not open files in ~/{folder}, which holds private app data or "
+            "credentials. Copy the file to another folder, or ask the user to set "
+            "plugins.entries.grimoire.settings.allow_private_folders: true.")
 
 
 def check(tool_name, args, cwd=None, limit_kb=DEFAULT_LIMIT_KB):
@@ -56,7 +80,7 @@ def check(tool_name, args, cwd=None, limit_kb=DEFAULT_LIMIT_KB):
     path = Path(os.path.expanduser(str(raw)))
     if not path.is_absolute():
         path = Path(cwd or os.getcwd()) / path
-    if path.suffix.lower() not in DATA_SUFFIXES:
+    if not is_data_path(path):
         return None
     try:
         size = path.stat().st_size

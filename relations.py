@@ -8,7 +8,6 @@ import re
 from . import engine
 
 _ID = re.compile(r"(^|_)(id|key|code|uuid|number|no)$", re.I)
-_NUMERIC = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC")
 TIMEOUT_S = 10
 MAX_METRICS = 6
 MAX_JOINS = 3
@@ -22,7 +21,7 @@ def roles(profile_rows):
         distinct = r.get("approx_unique") or 0
         if "DATE" in typ or "TIMESTAMP" in typ:
             out["time"].append(col)
-        elif any(t in typ for t in _NUMERIC):
+        elif engine.is_number_type(typ):
             if not _ID.search(col):  # by name only: unique amounts are common, so uniqueness is no sign of an ID
                 out["metrics"].append(col)
         elif typ in ("VARCHAR", "BOOLEAN") and 2 <= distinct <= 50:

@@ -2,9 +2,12 @@
 
 import importlib
 import json
+import os
+import re
 import sqlite3
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -296,12 +299,14 @@ def test_data_plugin(tmp, db):
     Path(path).unlink()
     # changes made in the Desktop panel (another process: store only) apply before the next query
     (tmp / "regions.csv").write_text("region,n\nNorth,1\nnorth ,2\n")
-    call(tools.attach, path=str(tmp / "regions.csv"))
-    store.propose_merge(db, "regions", "regions", "region", ["north "], "North")
+    # shop/regions.csv already has the name "regions": a second file of that name gets its own table
+    rn = call(tools.attach, path=str(tmp / "regions.csv"))["dataset"]
+    assert rn == "regions_2", rn
+    store.propose_merge(db, rn, rn, "region", ["north "], "North")
     store.approve_merges(db)
-    assert call(tools.query, sql="SELECT count(DISTINCT region) FROM regions")["rows"] == [[1]]
-    store.forget_dataset(db, "regions")
-    assert "error" in call(tools.query, sql="SELECT * FROM regions")
+    assert call(tools.query, sql=f"SELECT count(DISTINCT region) FROM {rn}")["rows"] == [[1]]
+    store.forget_dataset(db, rn)
+    assert "error" in call(tools.query, sql=f"SELECT * FROM {rn}")
 
 
 def test_audit(tmp, db):
@@ -309,8 +314,8 @@ def test_audit(tmp, db):
     (tmp / "orders.csv").write_text(
         "id,customer_id,day,amount\n1,10,2026-01-05,100\n2,10,2026-01-20,\n3,11,2026-02-03,50\n4,12,2026-02-10,70\n")
     (tmp / "visits.csv").write_text("customer_id,channel\n10,web\n10,app\n11,web\n")
-    call(tools.attach, path=str(tmp / "orders.csv"))
-    call(tools.attach, path=str(tmp / "visits.csv"))
+    call(tools.attach, path=str(tmp / "orders.csv"), name="orders")
+    call(tools.attach, path=str(tmp / "visits.csv"), name="visits")  # an explicit name replaces shop/visits.csv
     run = lambda sql: call(tools.query, sql=sql)
     eng = tools._get()[1]
     # assumptions: what a filter left out, top-N, plain words for IS NOT NULL
@@ -682,6 +687,81 @@ def test_builder(tmp, db):
     assert any(i["issue"] == "spelling variants of one value" for i in store.get_json(db, "issues:regions2"))
 
 
+def test_review_fixes(tmp, db):
+    """Fixes from the adversarial review of 2bf4dd9, each with the reviewer's repro."""
+    tools.setup(db=db, eng=None)
+    E = pkg.engine
+    d = tmp / "review"
+    d.mkdir(exist_ok=True)
+    # C-1: decimals after the reader's sample are not rounded away (CSV, JSON; "N/A" still skipped and reported)
+    (d / "late.csv").write_text("v\n" + "100\n" * 30000 + "0.4\n" * 100)
+    (d / "late.ndjson").write_text('{"v": 100}\n' * 30000 + '{"v": 0.4}\n' * 100)
+    (d / "na.csv").write_text("v\n" + "100\n" * 30000 + "N/A\n" + "0.4\n" * 100)
+    for f in ("late.csv", "late.ndjson", "na.csv"):
+        eng = E.Engine()
+        n, _ = eng.attach(str(d / f))
+        assert round(eng.query(f"SELECT sum(v) FROM {E.ident(n)}")[1][0][0], 6) == 3000040, f
+    assert eng.rejects(n)[0] == 1
+    # C-2: SQLite types come from every row, not the first 1,000
+    lite = d / "late.db"
+    con = sqlite3.connect(lite)
+    con.execute("CREATE TABLE t (amount DECIMAL(10,2), code)")
+    con.executemany("INSERT INTO t VALUES (?, ?)", [(10, 1)] * 1010 + [(0.49, "A7")])
+    con.commit()
+    con.close()
+    eng = E.Engine()
+    eng.attach(str(lite))
+    assert eng.query('SELECT sum(amount) FROM "late"."t"')[1] == [[10100.49]]
+    assert dict(eng.schema('"late"."t"'))["code"] == "VARCHAR"
+    # C-4: private folders are refused whatever the case, and for every file a pattern expands to
+    home = Path(os.path.expanduser("~"))
+    assert pkg.guard.private_folder(str(home / ".HERMES" / "auth.json")) == ".hermes"
+    assert pkg.guard.private_folder(str(home / "library" / "Messages" / "chat.db")) == "Library"
+    for trick in ("~/.HERMES/auth.json", "~/.herme?/*.json"):
+        if list(Path(os.path.expanduser("~/.hermes")).glob("*.json")):
+            try:
+                E.Engine().attach(trick)
+                raise AssertionError(trick)
+            except E.EngineError as exc:
+                assert "private app data" in str(exc), exc
+    # C-5: numbers that only match two hidden result values get a caveat, not "ready to share"
+    random_vals = [round(10 + 37.3 * i % 4990, 2) for i in range(150)] + list(range(1, 51))
+    s_, d_, u_, loose = verify.check_detail("Growth was 23.7%, the share 41.2% and the average 18.4.", random_vals)
+    assert not u_ and {"23.7%", "41.2%"} <= set(loose), (s_, d_, u_, loose)  # 18.4 is 1840 / 100 here: a unit change
+    assert pkg.audit.review([], None, [], loose)[0] == "share with caveats"
+    # C-7: only bracketed ids are citations
+    assert tools.check_reply("Apple's Q3 revenue rose 12%.", "never-used") == ""
+    # C-8 is covered in test_data_plugin (regions_2). C-9: a deleted file does not break other attaches
+    (d / "keep.csv").write_text("a\n1\n")
+    (d / "gone.csv").write_text("a\n2\n")
+    eng = E.Engine()
+    eng.attach(str(d / "gone.csv"))
+    (d / "gone.csv").unlink()
+    eng.attach(str(d / "keep.csv"))
+    assert eng.query("SELECT a FROM keep")[1] == [[1]]
+    # C-10: merges chain: A -> B, then B -> C sends A to C
+    store.save_merge(db, "chain", "chain", "c", ["a"], "b")
+    store.save_merge(db, "chain", "chain", "c", ["b"], "c")
+    assert store.merges(db, "chain")[("chain", "c")] == {"a": "c", "b": "c"}, store.merges(db, "chain")
+    store.delete_merges(db, "chain")
+    # C-12: a -- comment does not hide the conditions after it
+    parts = dict(pkg.learning.clauses("SELECT count(*) FROM t -- recent only\nWHERE x > 1 AND y = '--'"))
+    assert parts["WHERE"] == "WHERE x > 1 AND y = '--'", parts
+    # C-14: count(DISTINCT) is not additive
+    assert pkg.drivers.additive("count(*)") and not pkg.drivers.additive("count(DISTINCT customer_id)")
+    # C-16, C-17: a 40k-character word is cheap; a 400-digit number is no claim and no crash
+    t = time.monotonic()
+    pkg.guard.data_file_mentions("a" * 40000)
+    assert time.monotonic() - t < 0.5
+    assert verify.extract("9" * 400) == []
+    # N-2: INTERVAL and lists are not numbers; N-3: big .jsonl and .csv.gz reads are guarded too
+    assert E.is_number_type("DECIMAL(10,2)") and not E.is_number_type("INTERVAL") and not E.is_number_type("BIGINT[]")
+    assert pkg.guard.is_data_path("e.jsonl.gz") and not pkg.guard.is_data_path("log.txt.gz")
+    # page-version drift: the Desktop manifest version follows plugin.yaml
+    yaml_version = re.search(r'^version:\s*"([^"]+)"', (HERE / "plugin.yaml").read_text(), re.M).group(1)
+    assert json.loads((HERE / "dashboard" / "manifest.json").read_text())["version"] == yaml_version
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -832,6 +912,7 @@ def main():
     test_profile_checks(tmp, db)
     test_lean_setup(tmp, db)
     test_builder(tmp, db)
+    test_review_fixes(tmp, db)
     test_recipes(tmp, db)
     test_glob_and_names(tmp, db)
     test_charts()
