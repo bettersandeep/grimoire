@@ -63,9 +63,13 @@ def summary():
     db = _db()
     learn = store.get_setting(db, "learn", "off") == "on"
     datasets = []
+    added = dict(db.execute("SELECT name, attached_at FROM datasets").fetchall())
     for name, path, kind in store.datasets(db):
+        used = db.execute("SELECT count(*) FROM queries WHERE instr(',' || coalesce(datasets, '') || ',', "
+                          "',' || ? || ',') > 0", (name,)).fetchone()[0]
         datasets.append({
-            "name": name, "path": path, "kind": kind,
+            "name": name, "path": path, "kind": kind, "added_at": added.get(name),
+            "rows": store.get_json(db, f"rows:{name}", None), "queries": used,
             "missing": not Path(path).exists() and not any(ch in path for ch in "*?["),
             "notes": [{"column": col, "note": text} for _t, col, text in store.notes(db, name)],
             "merges": _merge_lines(store.merges(db, name)),
@@ -82,7 +86,7 @@ def summary():
         "predictions": store.get_json(db, "predictions", {"asked": 0, "close": 0}),
         "datasets": datasets, "pending": pending,
         "metrics": [{"name": n, "expression": e} for n, e in store.metrics(db).items()],
-        "lean_tip": lean_tip,
+        "lean_tip": lean_tip, "about": store.get_setting(db, "about_card", "") != "hidden",
     }
 
 
@@ -126,6 +130,8 @@ def settings(body: dict = Body(...)):
             store.set_setting(db, "predict", "off")
     if body.get("learn_style") in ("plain", "sql"):
         store.set_setting(db, "learn_style", body["learn_style"])
+    if body.get("hide_about"):
+        store.set_setting(db, "about_card", "hidden")
     if body.get("hide_lean_tip"):
         store.set_setting(db, "lean_card", "hidden")
     if "predict" in body:

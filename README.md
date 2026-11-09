@@ -41,11 +41,13 @@ Grimoire never changes your settings; it only tells you how.
 
 In Hermes Desktop:
 
-1. Open **Bots**, then **New Agent**. Name it Data.
-2. Open **Advanced** and clone from the profile that has Grimoire (usually default).
-3. Under toolsets, keep only **Grimoire** and **Clarifying Questions**.
+1. Open the **Bots** tab, click **+**, then **New bot**. Name it data.
+2. Click **Advanced** (below Description). Under **General**, clone from the profile that has Grimoire (usually default).
+3. Open **Capabilities**, then **Toolsets**. Switch off **All**, then switch on **Grimoire** and **Clarifying Questions**.
    Leave Skills off: it doubles the tokens of every call (measured: 2,214 to 4,532), and Grimoire adds the SQL recipe a question needs by itself.
-4. Ask data questions in the Data bot's chat.
+4. Click **Create bot**, then ask data questions in the data bot's chat.
+
+Already made a bot? Open its menu, choose **Edit…**, then **Advanced** and **Capabilities**.
 
 In a terminal: `hermes chat -t grimoire,clarify`.
 
@@ -74,7 +76,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Answers with SQL | DuckDB in memory; the model sees schemas and small results, never the rows |
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | After each reply: which numbers trace to query results, which are derived by simple arithmetic, and which have no source |
-| Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (an incomplete last month, an average of averages, a join that counts rows twice, a rate compared across periods whose row counts differ a lot), which clock day and hour buckets use and a verdict: ready to share, share with caveats, or needs revision |
+| Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (one value spelled two ways in the result, an incomplete last month, an average of averages, a join that counts rows twice, a rate compared across periods whose row counts differ a lot), which clock day and hour buckets use and a verdict: ready to share, share with caveats, or needs revision |
 | Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, spelling variants ('North' and 'north '), placeholder text ('N/A', '-'), placeholder numbers (9999), negative amounts, future dates, a column with one value; a health score out of 100 that lists every point taken off |
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Shape of the data | Which columns are dimensions, metrics and time; metrics that move together; ID columns that join to other attached files, with the share that matches |
@@ -113,7 +115,11 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 
 ## Hermes Desktop
 
-Grimoire adds a **Data** page to Hermes Desktop: your files with their data problems, merges waiting for approval, learning toggles, and every saved query with its chart, table, SQL and explanation.
+Grimoire adds a **Data** page to Hermes Desktop: your files with their size, health and data problems, merges waiting for approval, learning toggles, and every saved query.
+Each query has tabs for Chart, Table, SQL and How it was made.
+You can switch the chart type (bars, columns, line, area, donut) and pick which number to show; hover a mark to see its value.
+Tables keep the same decimals in a column and show a bar behind each number.
+Small files (up to 1,000,000 rows) get a health check as soon as you name them.
 Like every Desktop plugin it starts off; turn it on under **Capabilities → Plugins**.
 
 ## Tools the model gets

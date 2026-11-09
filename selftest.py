@@ -152,7 +152,7 @@ def test_learning(tmp, db):
              purpose="total per region")
     qid = r["id"]
     reply = f"South leads with 250 [{qid}], then North 100."
-    assert "Learning mode" not in tools.check_reply(reply, "test")
+    assert "\n---\nLearning mode" not in tools.check_reply(reply, "test")
     # explain: the user's words next to the SQL parts
     text = commands.run(f"explain {qid}")
     assert "Your question: What is the total amount per region" in text, text
@@ -196,7 +196,7 @@ def test_learning(tmp, db):
     assert "Predictions: on (1 of 2 guesses within 10%)" in commands.run("")
     commands.run("learn off")
     commands.run("learn plain")
-    assert "Learning mode" not in tools.check_reply(reply, "test")
+    assert "\n---\nLearning mode" not in tools.check_reply(reply, "test")
     # walkthrough pieces: a filter with counts, top-1 against the runner-up, a lone total
     w = pkg.walkthrough
     q1 = store.get_query(db, call(tools.query, sql="SELECT region, sum(amount) AS total FROM orders WHERE amount IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 1")["id"])
@@ -223,7 +223,13 @@ def test_auto_attach(tmp, db):
     f.write_text("day,visits\n2026-01-01,5\n2026-01-02,7\n")
     ctx = tools.auto_attach("How many visits in total in shop/visits.csv?", "auto", cwd=str(tmp))
     assert "is table \"visits\" (2 rows): day DATE, visits BIGINT" in ctx, ctx
-    assert 'tool_call with name "grimoire_query"' in ctx, ctx
+    assert 'tool_call name "grimoire_query"' in ctx and "no tables" not in ctx, ctx
+    # a small file is checked on attach: the answer can mention spelling variants, the page shows health
+    g = tmp / "shop" / "regions.csv"
+    g.write_text("region,amount\nNorth,5\nnorth ,7\nSouth,1\nNorth,2\n")
+    ctx2 = tools.auto_attach("Revenue per region in shop/regions.csv?", "auto", cwd=str(tmp))
+    assert "spelling variants of one value in region: 'North' / 'north '" in ctx2, ctx2
+    assert store.get_json(db, "health:regions", None)["score"] < 100 and store.get_json(db, "rows:regions") == 4
     assert call(tools.query, sql="SELECT sum(visits) FROM visits")["rows"] == [[12]]
     assert tools.auto_attach("hello there", "auto") is None
     assert "grimoire_drivers" not in ctx  # plain questions do not pay for the drivers hint
@@ -356,6 +362,11 @@ def test_analysis_checks(tmp, db):
     assert "uses 86.5, written into the SQL, not taken from the data" in pkg.audit.pitfalls(q, eng_of())
     assert pkg.audit._constants("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000") == ["0.18"]
     assert pkg.audit._constants("floor(fare_amount / 5) * 5 AS bucket, count(*)") == []  # a bucket width
+    # one value spelled two ways in the result: a warning, so the verdict is not "ready to share"
+    q = {"columns": ["region", "revenue"], "rows": [["North", 29.0], ["South", 24.5], ["north ", 3.0], ["N. Region", 0.9]]}
+    assert pkg.audit._result_variants(q) == "'North' / 'north '"
+    assert pkg.audit._result_variants({"columns": ["region", "n"], "rows": [["North", 1], ["South", 2]]}) is None
+    assert pkg.audit._result_variants({"columns": ["n", "m"], "rows": [[1, 2], [1, 3]]}) is None
 
 
 def eng_of():
@@ -593,6 +604,10 @@ def test_lean_setup(tmp, db):
     # no numbers from Hermes (or bad ones): no tip, no status line
     tools.remember_call("lean", tokens="11000")
     tools.remember_call("lean", tool_count=True)
+    store.set_setting(db, "learn_tip", "")  # as on a fresh install
+    out = tools.check_reply(reply, "lean")
+    assert "Tip: this chat" not in out
+    assert "Tip: to see how each answer was made" in out and "/grimoire learn on" in out, out  # once
     assert "Tip:" not in tools.check_reply(reply, "lean")
     assert "This chat:" not in commands.run("", session_id="lean")
     tools.remember_call("lean", tool_count=9)  # tools known, tokens not yet: still nothing
@@ -611,7 +626,8 @@ def test_lean_setup(tmp, db):
     assert "For fewer tokens: /grimoire setup" in commands.run("", session_id="full")
     assert store.get_json(db, "call_size", {}) == {"tools": 31, "tokens": 11200}
     text = commands.run("setup")
-    assert "New Agent" in text and "Grimoire never changes your settings" in text and "—" not in text
+    assert "New bot" in text and "Capabilities, then Toolsets" in text and "Grimoire never changes your settings" in text
+    assert "—" not in text
     # a chat that did not use Grimoire gets nothing
     assert tools.check_reply("Hello 42.", "other") == ""
 

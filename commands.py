@@ -37,10 +37,11 @@ Full Hermes sends every tool (terminal, browser, web and more) with every model 
 A bot with only Grimoire's tools sends about a fifth of that, and answers faster.
 
 In Hermes Desktop:
-  1. Open Bots, then New Agent. Name it Data.
-  2. Open Advanced. Clone from the profile that has Grimoire (usually default).
-  3. Under toolsets, turn everything off except Grimoire and Clarifying Questions.
-  4. Create, then ask data questions in the Data bot's chat.
+  1. Open the Bots tab, click +, then New bot. Name it data.
+  2. Click Advanced (below Description). Under General, clone from the profile that has Grimoire (usually default).
+  3. Open Capabilities, then Toolsets. Switch off All, then switch on Grimoire and Clarifying Questions.
+  4. Click Create bot, then ask data questions in the data bot's chat.
+Already made a bot? Open its menu, choose Edit..., then Advanced and Capabilities.
 Your main agent keeps all its tools. Grimoire never changes your settings.
 
 In a terminal: hermes chat -t grimoire,clarify"""

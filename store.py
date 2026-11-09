@@ -103,7 +103,8 @@ def save_dataset(db, name, path, kind):
 
 def forget_dataset(db, name):
     """Delete everything saved about one dataset: profile, notes, merges and the queries that read it."""
-    db.execute("DELETE FROM settings WHERE key IN (?, ?, ?)", (f"issues:{name}", f"shape:{name}", f"health:{name}"))
+    db.execute("DELETE FROM settings WHERE key IN (?, ?, ?, ?)",
+               (f"issues:{name}", f"shape:{name}", f"health:{name}", f"rows:{name}"))
     counts = {}
     for table, where in (("datasets", "name = ?"), ("columns", "dataset = ?"), ("merges", "dataset = ?"),
                          ("pending_merges", "dataset = ?"),

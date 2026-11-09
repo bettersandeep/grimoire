@@ -219,7 +219,12 @@ def check_reply(text, session_id=None):
                 if key_:
                     store.set_json(db, "seen_concepts", (seen + [key_])[-8:])
     try:
-        out += lean_tip(db, session_id)
+        tip = lean_tip(db, session_id)
+        if not tip and not learn and store.get_setting(db, "learn_tip", "") != "shown":
+            store.set_setting(db, "learn_tip", "shown")
+            tip = ("\nTip: to see how each answer was made, step by step, type /grimoire learn on "
+                   "or switch on Learning mode on the Data page.")
+        out += tip
     except Exception:
         pass  # the tip is extra; never lose the check because of it
     return out
@@ -313,7 +318,17 @@ def attach(args, session_id=None, **kwargs):
             store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
             tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
         remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
+        store.set_json(db, f"rows:{name}", sum(t["rows"] for t in tables))
         result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
+        if len(tables) == 1 and tables[0]["rows"] <= QUICK_CHECK_ROWS:
+            try:  # small enough: find problems now, so the answer and the Data page can mention them
+                variants = [i for i in _quality(db, eng, name, tables[0]["table"])[3]
+                            if i["issue"] == "spelling variants of one value"]
+                if variants:
+                    result["spelling_variants"] = [
+                        f"{i['column']}: " + " / ".join(repr(v["value"]) for v in i["variants"]) for i in variants[:3]]
+            except Exception:
+                pass  # the check is extra; never lose the attach because of it
         if engine.is_many(path):
             n_files = len(engine.files_of(path))
             result["files"] = n_files
@@ -340,6 +355,38 @@ def attach(args, session_id=None, **kwargs):
         return _err(f"attach failed: {exc}")
 
 
+def _quality(db, eng, dataset, ref):
+    """Profile one table, find data problems and score its health; saves all three for the Desktop page."""
+    rows, source = eng.profile(_sql_ref(ref))
+    compact, saved = [], []
+    for r in rows:
+        prof = {
+            "null_pct": r.get("null_percentage"),
+            "distinct": r.get("approx_unique"),
+            "min": _short(r.get("min")),
+            "max": _short(r.get("max")),
+        }
+        saved.append((r["column_name"], r["column_type"], prof))
+        compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
+    store.save_columns(db, dataset, ref, saved)
+    issues = eng.issues(source, rows)
+    if source != "grimoire_sample":  # duplicates in a sample say nothing about the table
+        dupes = eng.duplicate_rows(_sql_ref(ref))
+        if dupes:
+            issues.insert(0, {"issue": "duplicate rows", "rows": dupes})
+    store.set_json(db, f"issues:{dataset}", issues[:10])
+    try:
+        total = eng.row_count(_sql_ref(ref)) if source == "grimoire_sample" else rows[0].get("count") or 0
+        score = relations.health(rows, issues, total, eng.rejects(dataset)[0])
+        store.set_json(db, f"health:{dataset}", score)
+    except Exception:
+        score = None  # the score is extra; never lose the profile because of it
+    return rows, source, compact, issues, score
+
+
+QUICK_CHECK_ROWS = 1_000_000  # attach checks data quality itself up to this size (well under a second)
+
+
 def profile(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
@@ -353,30 +400,7 @@ def profile(args, session_id=None, **kwargs):
             stats = eng.column_stats(_sql_ref(ref), column, types[column])
             remember(session_id, stats)
             return _ok(table=ref, **{k: _round(engine.to_json_value(v)) for k, v in stats.items()}, note=UNTRUSTED)
-        rows, source = eng.profile(_sql_ref(ref))
-        compact, saved = [], []
-        for r in rows:
-            prof = {
-                "null_pct": r.get("null_percentage"),
-                "distinct": r.get("approx_unique"),
-                "min": _short(r.get("min")),
-                "max": _short(r.get("max")),
-            }
-            saved.append((r["column_name"], r["column_type"], prof))
-            compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
-        store.save_columns(db, dataset, ref, saved)
-        issues = eng.issues(source, rows)
-        if source != "grimoire_sample":  # duplicates in a sample say nothing about the table
-            dupes = eng.duplicate_rows(_sql_ref(ref))
-            if dupes:
-                issues.insert(0, {"issue": "duplicate rows", "rows": dupes})
-        store.set_json(db, f"issues:{dataset}", issues[:10])
-        try:
-            total = eng.row_count(_sql_ref(ref)) if source == "grimoire_sample" else rows[0].get("count") or 0
-            score = relations.health(rows, issues, total, eng.rejects(dataset)[0])
-            store.set_json(db, f"health:{dataset}", score)
-        except Exception:
-            score = None  # the score is extra; never lose the profile because of it
+        rows, source, compact, issues, score = _quality(db, eng, dataset, ref)
         remember(session_id, [row[2:] for row in compact])
         remember(session_id, issues)
         result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
@@ -596,6 +620,8 @@ def auto_attach(user_message, session_id=None, cwd=None):
             lines.append(f"  {result['skipped_lines']['count']} malformed lines were skipped; tell the user.")
         for rule in result.get("merges", []):
             lines.append(f"  merge rule: {rule}")
+        for v in result.get("spelling_variants", []):
+            lines.append(f"  spelling variants of one value in {v}; say so, and offer to combine them with grimoire_merge.")
         db, _eng = _get()
         for tbl, col, text in store.notes(db, result["dataset"]):
             lines.append(f"  note on {col}: {text}")
@@ -611,12 +637,13 @@ def auto_attach(user_message, session_id=None, cwd=None):
                      '"before": "2026-02", "after": "2026-03"} instead.')
     return (
         "[Grimoire] Data files are attached:\n" + "\n".join(lines) + "\n"
-        "Answer with one call: tool_call with name \"grimoire_query\" and arguments "
-        "{\"sql\": \"<one DuckDB SELECT>\", \"purpose\": \"<what it answers>\"}. Compute every number you "
-        "will state in that SQL, rounded as you will show it, then cite the query id like [q12]. Do not read "
-        "the file or parse it with code. Use grimoire_profile only if you need to check data quality.\n"
-        "Answer briefly: the numbers asked for with their query id, and at most one sentence of context. "
-        "Use a short list for several values; no tables, no notes and no SQL unless the user asks."
+        "Answer with tool_call name \"grimoire_query\" and arguments "
+        "{\"sql\": \"<one DuckDB SELECT>\", \"purpose\": \"<what it answers>\"}; one query is usually enough. "
+        "Compute every number you will state in that SQL, rounded as you will show it, and cite the query id "
+        "like [q12]. Do not read the file with other tools.\n"
+        "Keep the answer short: the numbers asked for with their query id, then one sentence of context, "
+        "for example a data problem you saw. For a long result, give the few rows that answer the question; "
+        "the Data page shows the full table and a chart. Grimoire adds its own check below your answer.\n"
     )
 
 
