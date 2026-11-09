@@ -71,11 +71,16 @@ def register(ctx):
 
     ctx.register_hook("post_tool_call", after_tool)
 
-    # Only two numbers per model call (tool count, approximate input tokens), to show what a chat costs.
-    def before_api(session_id=None, tool_count=None, approx_input_tokens=None, **kwargs):
-        tools.remember_call(session_id, tool_count, approx_input_tokens)
+    # Only two numbers per model call, to show what a chat costs: the tool count before it,
+    # and the provider's input token count after it. No message content is kept.
+    def before_api(session_id=None, tool_count=None, **kwargs):
+        tools.remember_call(session_id, tool_count=tool_count)
+
+    def after_api(session_id=None, usage=None, **kwargs):
+        tools.remember_call(session_id, tokens=(usage or {}).get("prompt_tokens"))
 
     ctx.register_hook("pre_api_request", before_api)
+    ctx.register_hook("post_api_request", after_api)
 
     ctx.register_skill("explore-data", Path(__file__).resolve().parent / "skills" / "explore-data" / "SKILL.md",
                        description="Answer questions about CSV, JSON, Parquet or SQLite files with Grimoire.")

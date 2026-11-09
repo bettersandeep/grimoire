@@ -362,17 +362,20 @@ def test_lean_setup(tmp, db):
     qid = call(tools.query, sql="SELECT sum(amount) AS total FROM lean")["id"]
     reply = f"The total is 350 [{qid}]."
     # no numbers from Hermes (or bad ones): no tip, no status line
-    tools.remember_call("lean", None, "11000")
+    tools.remember_call("lean", tokens="11000")
+    tools.remember_call("lean", tool_count=True)
     assert "Tip:" not in tools.check_reply(reply, "lean")
     assert "This chat:" not in commands.run("", session_id="lean")
+    tools.remember_call("lean", tool_count=9)  # tools known, tokens not yet: still nothing
+    assert "This chat:" not in commands.run("", session_id="lean")
     # a lean chat: status says so, no tip
-    tools.remember_call("lean", 9, 2100)
+    tools.remember_call("lean", tokens=2100)
     assert "Tip:" not in tools.check_reply(reply, "lean")
     assert "9 tools, about 2,100 tokens per model call (lean setup)" in commands.run("", session_id="lean")
     # full Hermes: the tip shows once, with the chat's smallest call, then never again
-    tools.remember_call("full", 31, 11800)
-    tools.remember_call("full", 31, 11200)
-    tools.remember_call("full", 31, 14000)
+    for tokens in (11800, 11200, 14000):
+        tools.remember_call("full", tool_count=31)
+        tools.remember_call("full", tokens=tokens)
     out = tools.check_reply(reply, "full")
     assert "Tip: this chat sends 31 tools and about 11,200 tokens" in out and "/grimoire setup" in out, out
     assert "Tip:" not in tools.check_reply(reply, "full")

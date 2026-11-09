@@ -108,19 +108,25 @@ def learning_state():
     return learn, learn and store.get_setting(db, "predict", "off") == "on"
 
 
-def remember_call(session_id, tool_count, tokens):
-    """Keep the size of each model call (from Hermes's pre_api_request hook) to show what a chat costs."""
-    if not isinstance(tool_count, int) or not isinstance(tokens, int) or tokens <= 0:
-        return
+def remember_call(session_id, tool_count=None, tokens=None):
+    """Keep the size of each model call to show what a chat costs. Hermes hooks give the tool count
+    (pre_api_request) and the provider's real input tokens (post_api_request); bad values are ignored."""
+    good = lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0
     with _lock:
-        tools_, fewest = _calls.get(session_id or "", (0, tokens))
-        _put(_calls, session_id, (max(tools_, tool_count), min(fewest, tokens)))
+        tools_, fewest = _calls.get(session_id or "", (0, 0))
+        if good(tool_count):
+            tools_ = max(tools_, tool_count)
+        if good(tokens):
+            fewest = min(fewest, tokens) if fewest else tokens
+        if tools_ or fewest:
+            _put(_calls, session_id, (tools_, fewest))
 
 
 def call_size(session_id):
     """(tools, tokens) of this chat's smallest model call, or None when Hermes did not report it."""
     with _lock:
-        return _calls.get(session_id or "")
+        size = _calls.get(session_id or "")
+    return size if size and all(size) else None
 
 
 def lean_tip(db, session_id):
