@@ -1,63 +1,41 @@
-<!doctype html><html><head><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=JetBrains+Mono:wght@500;700&display=block" rel="stylesheet">
-<style>
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="fonts.css"><style>
 *{box-sizing:border-box;margin:0}
-body{width:1200px;height:600px;overflow:hidden;background:#0a0a0a;position:relative;font-family:"Archivo Black",sans-serif}
-.layer{position:absolute;inset:0}
-.grid{background-image:linear-gradient(#2a55ff22 1px,transparent 1px),linear-gradient(90deg,#2a55ff22 1px,transparent 1px);background-size:40px 40px}
-.fold{background:linear-gradient(90deg,transparent 49.8%,#ffffff0a 50%,transparent 50.2%),linear-gradient(transparent 49.6%,#0000004d 50%,transparent 50.4%)}
-.sun{position:absolute;left:512px;top:40px;width:230px;height:230px;border-radius:50%;background:radial-gradient(circle at 42% 38%,#f04a37,#d42d21 72%,#b3221a)}
-.hermes{position:absolute;left:446px;top:6px;width:330px;height:470px;
-  background:url(hermes-trismegistus-1675.svg) no-repeat;background-size:428px 552px;background-position:-38px -52px;
-  filter:invert(1) sepia(.2) brightness(.92);mix-blend-mode:screen;
-  -webkit-mask-image:radial-gradient(ellipse 50% 58% at 50% 40%,#000 55%,transparent 100%)}
-.glitch div{position:absolute;height:9px;mix-blend-mode:normal}
-.y{background:#ffd60a}.b{background:#2a55ff}
-.card{position:absolute;border:1.5px solid #2a55ff;background:#0a0f2a99;padding:12px 14px;font:500 12.5px/1.7 "JetBrains Mono",monospace;color:#7d96ff}
-.card .k{color:#ffd60a}.card .w{color:#e9ecff}.card .bad{color:#ff5c4d;text-decoration:line-through;text-decoration-thickness:2px}.card .ok{color:#ffd60a;font-weight:700}
-.tick{position:absolute;width:10px;height:10px;border:1.5px solid #2a55ff}
-.bars{position:absolute;display:flex;align-items:flex-end;gap:10px}
-.bars i{display:block;width:26px;background:#2a55ff;border:1.5px solid #6f8bff}
-.bars i.hl{background:#ffd60a;border-color:#ffd60a}
-.tag{position:absolute;left:0;right:0;text-align:center}
-.small{top:440px;text-shadow:0 0 12px #000,0 0 4px #000;color:#f2f2f2;font:700 19px "Archivo Black";letter-spacing:7px}
-.title{top:468px;font:118px/1 "Anton",Impact,sans-serif;color:#ffd60a;letter-spacing:5px;text-shadow:0 3px 0 #000,0 0 30px #000}
-.credit{position:absolute;right:46px;bottom:26px;color:#f2f2f2;font:600 13px -apple-system,sans-serif;opacity:.85}
-.motto{position:absolute;left:46px;bottom:26px;color:#9aa4c8;font:500 12px "JetBrains Mono",monospace;letter-spacing:1px}
-.noise{opacity:.35;mix-blend-mode:overlay}
+body{width:1200px;height:600px;overflow:hidden;position:relative;background:radial-gradient(900px 520px at 30% 45%,var(--paper),var(--paper2) 85%);color:var(--ink);font-family:"Geist",sans-serif}
+.tex{position:absolute;inset:0;opacity:.32;mix-blend-mode:multiply}
+.left{position:absolute;left:72px;top:92px;width:600px}
+.kicker{font:600 14px "Geist Mono",monospace;letter-spacing:3.5px;text-transform:uppercase;color:var(--teal)}
+h1{font:600 148px/0.95 "Geist Serif",serif;letter-spacing:-4px;margin:18px 0 22px;color:var(--ink)}
+.tag{font:400 27px/1.38 "Geist",sans-serif;color:var(--ink2);max-width:540px}
+.tag b{font-weight:600;color:var(--ink)}
+.rule{width:64px;height:2px;background:var(--teal);margin:30px 0 18px}
+.meta{font:400 15px "Geist Mono",monospace;color:var(--ink2);letter-spacing:.3px}
+.meta span{color:var(--teal);margin:0 8px}
+.page{position:absolute;right:76px;top:44px;width:340px;height:500px;border-radius:170px 170px 6px 6px;background:#f7f2e6;
+  box-shadow:0 0 0 1.5px var(--ink),0 0 0 7px #f7f2e6,0 0 0 8.5px var(--teal),0 24px 50px #2a201033;overflow:hidden}
+.page .fig{position:absolute;inset:0;background:url(hermes-trismegistus-1675.svg) no-repeat;background-size:560px 723px;background-position:-60px -50px;mix-blend-mode:multiply;filter:sepia(.35) contrast(1.05)}
+.slip{position:absolute;left:640px;top:350px;width:300px;padding:16px 18px 22px;background:#fffdf7;transform:rotate(-4deg);
+  box-shadow:0 14px 30px #2a20103d,0 1px 0 #0001;font:400 14px/1.7 "Geist Mono",monospace;color:var(--ink);
+  -webkit-mask:linear-gradient(#000 0 0) top/100% calc(100% - 8px) no-repeat,conic-gradient(from -45deg at bottom,#0000,#000 1deg 89deg,#0000 90deg) bottom/16px 8px repeat-x}
+.slip .h{font-weight:600;letter-spacing:2px;color:var(--teal);font-size:12px;margin-bottom:6px}
+.slip .bad{color:var(--bad);text-decoration:line-through;text-decoration-thickness:1.5px}
+.slip .ok{color:var(--teal);font-weight:600}
+.slip .sql{font-size:11.5px;color:var(--ink2);border-top:1px dashed #16211f40;margin-top:8px;padding-top:6px}
+.foot{position:absolute;left:72px;bottom:34px;font:400 13px "Geist Mono",monospace;color:var(--ink2);letter-spacing:.5px}
 </style></head><body>
-<svg width="0" height="0" style="position:absolute"><filter id="rough"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="3"/><feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -1.6 1.15"/><feComposite in="SourceGraphic" operator="in"/></filter></svg>
-<div class="layer grid"></div>
-<div class="layer fold"></div>
-<div class="sun"></div>
-<div class="hermes"></div>
-
-<div class="layer glitch">
-  <div class="y" style="left:440px;top:150px;width:120px"></div><div class="b" style="left:478px;top:160px;width:70px"></div>
-  <div class="b" style="left:640px;top:226px;width:150px"></div><div class="y" style="left:700px;top:236px;width:90px;height:6px"></div>
-  <div class="y" style="left:420px;top:318px;width:110px;height:6px"></div><div class="b" style="left:452px;top:325px;width:130px"></div>
-  <div class="y" style="left:660px;top:368px;width:150px"></div><div class="b" style="left:630px;top:378px;width:60px;height:5px"></div>
+<svg class="tex" width="1200" height="600"><filter id="p"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="3" seed="11"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#p)"/></svg>
+<div class="left">
+  <div class="kicker">A Hermes Agent plugin · by bettersandeep</div>
+  <h1>Grimoire</h1>
+  <p class="tag">Ask your data files anything. <b>Every number in the answer has a receipt.</b></p>
+  <div class="rule"></div>
+  <div class="meta">CSV<span>·</span>Parquet<span>·</span>JSON<span>·</span>SQLite<span>/</span>DuckDB, local, read-only</div>
 </div>
-
-<div class="card" style="left:56px;top:70px;width:300px">
-  <div><span class="k">SELECT</span> <span class="w">region</span>,</div>
-  <div>&nbsp;&nbsp;<span class="k">sum</span>(<span class="w">amount_cents</span>) / 100</div>
-  <div><span class="k">FROM</span> <span class="w">sales</span> <span class="k">GROUP BY</span> 1</div>
-  <div style="margin-top:6px;color:#4f68d8">-- q42 · DuckDB · 50,000 rows</div>
+<div class="page"><div class="fig"></div></div>
+<div class="slip">
+  <div class="h">RECEIPT · Q65</div>
+  <div>answer &nbsp;<span class="bad">10,911</span> units ✗</div>
+  <div>query &nbsp;&nbsp;<span class="ok">1,091</span> units ✓</div>
+  <div class="sql">SELECT category, SUM(units) …</div>
 </div>
-<div class="tick" style="left:51px;top:65px"></div><div class="tick" style="left:349px;top:226px"></div>
-
-<div class="card" style="left:850px;top:250px;width:300px">
-  <div style="color:#4f68d8">RECEIPT · q65</div>
-  <div>answer &nbsp;&nbsp;<span class="bad">10,911</span> units</div>
-  <div>query &nbsp;&nbsp;&nbsp;<span class="ok">1,091</span> units ✓</div>
-</div>
-<div class="bars" style="left:900px;top:84px;height:140px"><i style="height:52px"></i><i style="height:78px"></i><i style="height:64px"></i><i class="hl" style="height:118px"></i><i style="height:92px"></i></div>
-<svg style="position:absolute;left:880px;top:76px" width="230" height="160"><path d="M0 150H226M0 0V150" stroke="#2a55ff" stroke-width="1.5" fill="none"/></svg>
-
-<div class="tag small">HERMES AGENT PLUGIN</div>
-<div class="tag title">GRIMOIRE</div>
-<div class="motto">EVERY NUMBER HAS A RECEIPT</div>
-<div class="credit">bettersandeep/grimoire</div>
-<svg class="layer noise" width="1200" height="600"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="3" seed="8"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>
+<div class="foot">github.com/bettersandeep/grimoire</div>
 </body></html>
