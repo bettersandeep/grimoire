@@ -106,8 +106,11 @@ def assumptions(q, eng):
 def _constants(select):
     """Numbers the SQL multiplies or divides by, other than unit factors (10, 100, 1000 ...) and 1 or 2."""
     found = []
+    buckets = set(re.findall(r"/\s*(\d+(?:\.\d+)?)\s*\)\s*\*\s*\1\b", select))  # floor(x / 5) * 5: a bucket width
     for m in _FACTOR.finditer(select):
         raw = m.group(1) or m.group(2)
+        if raw in buckets:
+            continue
         v = float(raw)
         if v in (0, 1, 2) or (v == int(v) and str(int(v)).strip("0") == "1"):
             continue  # unit changes and halves are not assumptions
@@ -197,7 +200,9 @@ def _changing_base(q, eng, column, kind):
                             f'WHERE "{column}" IS NOT NULL GROUP BY 1 ORDER BY 1')
         if counts is None:
             continue
-        inner = [n for _p, n in counts[1:-1]]
+        shown = {str(v)[:7 if kind == "month" else 4] for row in q["rows"] for v in row if isinstance(v, str)}
+        counts = [(p_, n) for p_, n in counts if str(p_)[:7 if kind == "month" else 4] in shown] or counts
+        inner = [n for _p, n in counts[1:-1]]  # only the periods the result shows; stray dates elsewhere do not count
         if len(inner) >= 2 and min(inner) and max(inner) >= 2 * min(inner):
             return (f"rows per {kind} range from {min(inner):,} to {max(inner):,}, so a rate or average can "
                     "move because the base changed; show the counts next to it")

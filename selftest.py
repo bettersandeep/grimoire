@@ -41,7 +41,8 @@ def test_verify():
     vals = [76840174.17, 14.2, 0.383, 2436]
     chk = lambda text, v=vals, **kw: verify.check(text, v, **kw)
     assert chk("North made 76.8M") == (["76.8M"], [], [])
-    assert chk("North made ₹76,840,174.17") == (["76,840,174.17"], [], [])
+    assert chk("North made $76,840,174.17") == (["76,840,174.17"], [], [])
+    assert chk("North made ₹76,840,174.17") == (["76,840,174.17"], [], [])  # other currency symbols work too
     assert chk("growth was 14.2%") == (["14.2%"], [], [])
     assert chk("38.3% are empty") == (["38.3%"], [], [])  # matches 0.383
     assert chk("2,436 rows") == (["2,436"], [], [])
@@ -54,9 +55,9 @@ def test_verify():
     # derived numbers: simple arithmetic on shown numbers, unit changes, column totals
     v = [50000, 1996, 189759.34, 72188507.98, 4651666.19]
     assert chk("50,000 rows, 1,996 empty, so 48,004 kept", v) == (["50,000", "1,996"], ["48,004"], [])
-    assert chk("₹189,759.34 (18,975,934 paise)", v) == (["189,759.34"], ["18,975,934"], [])
+    assert chk("$189,759.34 (18,975,934 cents)", v) == (["189,759.34"], ["18,975,934"], [])
     assert chk("72,188,507.98 and 4,651,666.19 make 76,840,174.17", v)[1] == ["76,840,174.17"]
-    assert chk("Total ₹300", [100, 200], totals=[300])[1] == ["300"]
+    assert chk("Total $300", [100, 200], totals=[300])[1] == ["300"]
     assert chk("964 of 1000 rows have an amount (36 skipped)", [1000, 964]) == (["964"], ["36"], [])
     assert chk("about 2,000 empty", v) == ([], [], ["2,000"])  # rounded: still flagged
     # the real reply: the derived total is now traced by arithmetic; the invented count is still flagged
@@ -298,10 +299,12 @@ def test_analysis_checks(tmp, db):
     lines = ["ts,converted"]
     for month, n in ((1, 5), (2, 10), (3, 40), (4, 12), (5, 3)):  # March has 4x the rows of February
         lines += [f"2026-{month:02d}-{1 + i % 27:02d} {i % 24:02d}:15:00,{i % 3 == 0}" for i in range(n)]
+    lines.append("2002-01-05 10:00:00,true")  # a stray date, filtered out below: must not count as a period
     csv.write_text("\n".join(lines) + "\n")
     call(tools.attach, path=str(csv))
     run = lambda sql: call(tools.query, sql=sql)
-    rate = "SELECT date_trunc('month', ts) AS m, round(100 * count_if(converted) / count(*), 1) AS pct FROM visits GROUP BY 1 ORDER BY 1"
+    rate = ("SELECT date_trunc('month', ts) AS m, round(100 * count_if(converted) / count(*), 1) AS pct FROM visits "
+            "WHERE ts >= '2026-01-01' GROUP BY 1 ORDER BY 1")
     q = store.get_query(db, run(rate)["id"])
     assert any("rows per month range from 10 to 40" in w for w in pkg.audit.pitfalls(q, eng_of())), pkg.audit.pitfalls(q, eng_of())
     # a total per month is not a rate, and a division by 100 is a unit change: no warning
@@ -320,6 +323,7 @@ def test_analysis_checks(tmp, db):
     q = store.get_query(db, run("SELECT round(count(*) / 100.0 / 86.5, 2) AS usd, count(*) * 1000 AS m FROM visits")["id"])
     assert "uses 86.5, written into the SQL, not taken from the data" in pkg.audit.pitfalls(q, eng_of())
     assert pkg.audit._constants("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000") == ["0.18"]
+    assert pkg.audit._constants("floor(fare_amount / 5) * 5 AS bucket, count(*)") == []  # a bucket width
 
 
 def eng_of():
@@ -328,21 +332,21 @@ def eng_of():
 
 def test_metrics(tmp, db):
     tools.setup(db=db, eng=None)
-    (tmp / "pay.csv").write_text("region,amount_paise\nNorth,1000\nNorth,2500\nSouth,\n")
+    (tmp / "pay.csv").write_text("region,amount_cents\nNorth,1000\nNorth,2500\nSouth,\n")
     call(tools.attach, path=str(tmp / "pay.csv"))
-    out = commands.run("define revenue = sum(amount_paise) / 100")
-    assert out.startswith("Saved revenue() = sum(amount_paise) / 100") and "pay" in out, out
+    out = commands.run("define revenue = sum(amount_cents) / 100")
+    assert out.startswith("Saved revenue() = sum(amount_cents) / 100") and "pay" in out, out
     for bad, why in [("define sum = sum(x)", "already a DuckDB function"), ("define r = sum(nope)", "does not work"),
                      ("define r = 1; DROP VIEW pay", "one SQL expression"), ("define Bad Name = 1", "lower-case name"),
                      ("define revenue", "Use: /grimoire define")]:
         assert why in commands.run(bad), (bad, commands.run(bad))
     r = call(tools.query, sql="SELECT region, Revenue() AS rev FROM pay GROUP BY 1 ORDER BY 1")
     assert r["rows"] == [["North", 35.0], ["South", None]] and "revenue()" in r["metrics"], r
-    assert "(sum(amount_paise) / 100)" in store.get_query(db, r["id"])["sql"]  # the receipt shows the real SQL
-    assert "revenue() = sum(amount_paise) / 100" in tools.auto_attach(f"total in {tmp / 'pay.csv'}", "m")
-    assert call(tools.catalog)["metrics"] == {"revenue()": "sum(amount_paise) / 100"}
+    assert "(sum(amount_cents) / 100)" in store.get_query(db, r["id"])["sql"]  # the receipt shows the real SQL
+    assert "revenue() = sum(amount_cents) / 100" in tools.auto_attach(f"total in {tmp / 'pay.csv'}", "m")
+    assert call(tools.catalog)["metrics"] == {"revenue()": "sum(amount_cents) / 100"}
     assert "error" in call(tools.query, sql="SELECT revenue(); SELECT 1")  # expansion keeps the one-SELECT rule
-    assert commands.run("metrics") == "revenue() = sum(amount_paise) / 100"
+    assert commands.run("metrics") == "revenue() = sum(amount_cents) / 100"
     assert commands.run("undefine revenue") == "Removed revenue()."
     assert "error" in call(tools.query, sql="SELECT revenue() FROM pay")  # gone: no silent fallback
 

@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0}
+body{width:1200px;height:600px;overflow:hidden;background:radial-gradient(1200px 600px at 0% 0%,#123d39 0%,#0b1716 55%,#081110 100%);color:#e6efec;font-family:-apple-system,"SF Pro Display",system-ui,sans-serif;display:flex;flex-direction:column;justify-content:space-between;padding:56px 60px 40px}
+.top{display:flex;gap:44px;align-items:center}
+.left{flex:1;min-width:0}
+.brand{display:flex;align-items:center;gap:22px;margin-bottom:22px}
+.brand img{width:96px;height:96px}
+h1{font-size:64px;font-weight:700;letter-spacing:-1.5px}
+.tag{font-size:24px;line-height:1.4;color:#b9cbc6;max-width:520px}
+.tag b{color:#eef7f4;font-weight:600}
+.chips{display:flex;gap:10px;margin-top:26px;flex-wrap:wrap}
+.chip{font-size:15px;padding:6px 12px;border-radius:7px;background:#ffffff10;color:#a9bdb7;border:1px solid #ffffff14}
+.card{width:580px;flex:none;background:#0f1a19;border:1px solid #23312f;border-radius:14px;padding:20px 22px;font:14.5px/1.6 Menlo,ui-monospace,monospace;box-shadow:0 20px 50px #0008}
+.dots{display:flex;gap:7px;margin-bottom:14px}.dots i{width:11px;height:11px;border-radius:50%;display:block}
+.p{color:#3cc4b4}.m{color:#7f918c}.r{color:#ff6b6b;font-weight:700}.g{color:#5fd38d;font-weight:700}
+.bad{outline:2px solid #ff6b6b;outline-offset:1px;border-radius:2px}
+.gap{height:10px}
+.stats{display:flex;gap:0;border-top:1px solid #ffffff14;padding-top:22px}
+.stat{flex:1}.stat b{display:block;font-size:30px;font-weight:700;color:#eef7f4;letter-spacing:-.5px}.stat span{font-size:15px;color:#8fa29d}
+.stat b em{font-style:normal;color:#3cc4b4}
+</style></head><body>
+<div class="top">
+  <div class="left">
+    <div class="brand"><img src="../icon.svg" alt=""><h1>Grimoire</h1></div>
+    <p class="tag">Ask Hermes about your data files. <b>Every number in the answer is checked against the SQL that produced it.</b></p>
+    <div class="chips"><span class="chip">CSV · Parquet · JSON · SQLite</span><span class="chip">DuckDB, local, read-only</span></div>
+  </div>
+  <div class="card">
+    <div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <div><span class="p">›</span> Which category sold the most units?</div>
+    <div class="gap"></div>
+    <div>Electronics sold the most: <span class="bad">10,911</span> units [q65].</div>
+    <div class="m">Grimoire check: 0 of 1 numbers trace to query results.</div>
+    <div class="r">No source query for: 10,911. Verdict: needs revision.</div>
+    <div class="gap"></div>
+    <div><span class="p">›</span> /grimoire sql q65</div>
+    <div>Electronics | <span class="g">1091</span></div>
+  </div>
+</div>
+<div class="stats">
+  <div class="stat"><b>20.3M rows</b><span>NYC taxi trips, 6 Parquet files</span></div>
+  <div class="stat"><b><em>5,037</em> vs 123,437</b><span>input tokens per answer, vs plain Hermes</span></div>
+  <div class="stat"><b><em>12 s</em> vs 75 s</b><span>time per answer, all 6 correct</span></div>
+</div>
+</body></html>
