@@ -1,5 +1,7 @@
 # Grimoire
 
+![Grimoire: a Hermes Agent plugin. Every number has a receipt.](assets/banner.jpg)
+
 A Hermes Agent plugin for learning and exploring data with fewer tokens.
 Every number has a receipt.
 
@@ -180,3 +182,7 @@ hermes plugins validate . --install-deps
 ```
 
 MIT license.
+
+## Credits
+
+The icon and banner use a public-domain engraving of Hermes Trismegistus by Jean-Louis Durant (1675); see [assets/CREDITS.md](assets/CREDITS.md).

@@ -485,6 +485,9 @@ def test_charts():
         shown = report.ticks(n, 500, 70)
         step = 500 / (n - 1)
         assert shown[-1] == n - 1 and all((b - a) * step >= 70 * 1.5 for a, b in zip(shown, shown[1:])), (n, shown)
+    page = report.html_report([{"id": "q9", "purpose": "b", "question": None, "sql": "SELECT 1", "created_at": 0,
+                                "datasets": ["t"], "columns": ["bucket", "n"], "rows": [[0.0, 5], [5.0, 9], [10.0, 4]]}], "T")
+    assert ">1 query<" in page and ">5<" in page and ">5.00<" not in page
     assert report._fmt("2024-06-01T00:00:00") == "2024-06-01" and report._fmt("2024-06-01T10:30:00") == "2024-06-01T10:30:00"
 
 
