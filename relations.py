@@ -72,3 +72,22 @@ def join_keys(eng, dataset, table, columns):
                 if len(out) >= MAX_JOINS:
                     return out
     return out
+
+
+def health(profile_rows, issues, rows, skipped=0):
+    """A 0 to 100 score for one table, with the reason for every point taken off.
+    Empty cells cost their average percentage (up to 30), duplicate rows and skipped lines their
+    percentage of rows (at least 1, up to 20 each), every other problem 3 points (up to 30)."""
+    cols = [float(r.get("null_percentage") or 0) for r in profile_rows]
+    off = []
+    empty = round(sum(cols) / len(cols)) if cols else 0
+    if empty:
+        off.append((min(30, empty), "empty values"))
+    dupes = next((i["rows"] for i in issues if i.get("issue") == "duplicate rows"), 0)
+    for n, label in ((dupes, "duplicate rows"), (skipped, "skipped lines")):
+        if n and rows:
+            off.append((min(20, max(1, round(100 * n / rows))), label))
+    other = [i for i in issues if i.get("issue") not in ("duplicate rows", "empty values")]
+    if other:
+        off.append((min(30, 3 * len(other)), f"{len(other)} other problem{'s' if len(other) > 1 else ''}"))
+    return {"score": 100 - sum(n for n, _ in off), "off": [f"-{n} {label}" for n, label in off]}

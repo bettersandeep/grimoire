@@ -13,6 +13,7 @@ pkg = importlib.import_module(HERE.name)
 commands, engine, guard, learning, schemas, store, tools, verify = (
     pkg.commands, pkg.engine, pkg.guard, pkg.learning, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
 drivers_mod = pkg.drivers
+relations = pkg.relations
 
 
 # A real reply from a Hermes session (2026-11-08) with the results it was based on.
@@ -354,6 +355,42 @@ def test_relations(tmp, db):
     assert learning.better_question([{"issue": "duplicate rows", "rows": 2}], shape).startswith("2 rows are exact copies")
 
 
+def test_profile_checks(tmp, db):
+    tools.setup(db=db, eng=None)
+    csv = tmp / "odd.csv"
+    lines = ["id,city,amount,age,shipped,source,score"]
+    for i in range(1, 41):
+        city = ["Pune", "N/A", "-", "Delhi"][i % 4]
+        amount = -5 if i in (3, 7) else 100 + i
+        age = 9999 if i == 5 else 20 + i % 30
+        shipped = "2999-01-01" if i == 9 else f"2026-01-{1 + i % 28:02d}"
+        score = -1 if i == 2 else i  # a negative score is not an amount: not flagged
+        lines.append(f"{i},{city},{amount},{age},{shipped},web,{score}")
+    csv.write_text("\n".join(lines) + "\n")
+    call(tools.attach, path=str(csv))
+    r = call(tools.profile, dataset="odd")
+    got = {(i.get("column"), i["issue"]): i for i in r["issues"]}
+    assert got[("city", "placeholder text like 'N/A', '-' or 'unknown'")]["rows"] == 20, got
+    assert got[("amount", "negative values")]["rows"] == 2, got
+    assert got[("age", "9999 may be a placeholder")]["rows"] == 1, got
+    assert got[("shipped", "dates in the future")]["rows"] == 1, got
+    assert ("source", "same value in every row") in got, got
+    assert not any(c == "score" for c, _ in got), got
+    assert r["health"].startswith("8") and "5 other problems" in r["health"], r["health"]
+    assert store.get_json(db, "health:odd", {})["score"] == int(r["health"].split("/")[0])
+    # the score explains every point taken off, and stays in 0..100
+    h = relations.health([{"null_percentage": 50}] * 2, [{"issue": "duplicate rows", "rows": 500}] + [{"issue": "x"}] * 20, 1000, 300)
+    assert h == {"score": 100 - 30 - 20 - 20 - 30, "off": ["-30 empty values", "-20 duplicate rows", "-20 skipped lines", "-30 20 other problems"]}, h
+    assert relations.health([{"null_percentage": 0}], [], 10) == {"score": 100, "off": []}
+    # a date check uses the day it is given, so it is testable
+    rows = [{"column_name": "d", "column_type": "DATE", "min": "2026-01-01", "max": "2026-06-01", "approx_unique": 9, "count": 9}]
+    assert engine.suspicious_checks(rows, "2026-12-01") == []
+    assert len(engine.suspicious_checks(rows, "2026-05-01")) == 1
+    # learning mode asks about it
+    assert "negative amount" in learning.better_question([{"issue": "negative values", "column": "amount", "rows": 2}])
+    assert store.forget_dataset(db, "odd") and store.get_json(db, "health:odd", None) is None
+
+
 def test_lean_setup(tmp, db):
     tools.setup(db=db, eng=None)
     csv = tmp / "lean.csv"
@@ -533,6 +570,7 @@ def main():
     test_metrics(tmp, db)
     test_drivers(tmp, db)
     test_relations(tmp, db)
+    test_profile_checks(tmp, db)
     test_lean_setup(tmp, db)
     print("selftest passed")
 

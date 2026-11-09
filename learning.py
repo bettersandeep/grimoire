@@ -157,6 +157,16 @@ def better_question(issues, shape=None):
         if issue.get("issue", "").startswith("text column"):
             ex = ", ".join(map(str, issue.get("examples") or []))
             return f"{issue['column']} has values that are not numbers ({ex}). Should those rows count?"
+    for issue in issues or []:
+        kind, col, n = issue.get("issue", ""), issue.get("column"), issue.get("rows") or 0
+        if kind == "negative values":
+            return f"{n:,} rows have a negative {col}. Refunds, or errors? Leave them in or filter them out?"
+        if kind == "dates in the future":
+            return f"{n:,} rows have {col} after today (latest {issue.get('max')}). Typos, or planned items?"
+        if kind.endswith("may be a placeholder"):
+            return f"{n:,} rows have {col} = {issue['value']:g}. A real value, or a code for unknown?"
+        if kind.startswith("placeholder text"):
+            return f"{n:,} rows of {col} hold text like 'N/A' or '-'. Should they count as empty?"
     shape = shape or {}
     for a, b, r in shape.get("correlations") or []:
         return f"{a} and {b} move together (r = {r}). Does one drive the other, or does a third thing drive both?"

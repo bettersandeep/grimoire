@@ -420,7 +420,58 @@ class Engine:
                     groups.setdefault(key, []).append({"value": value, "rows": n})
                 for variants in list(groups.values())[:5]:
                     found.append({"column": col, "issue": "spelling variants of one value", "variants": variants})
+        return found + self.suspicious(table, profile_rows)
+
+    def suspicious(self, table, profile_rows, today=None):
+        """Placeholders, a column with one value, negative amounts, future dates: one read of the table."""
+        checks = suspicious_checks(profile_rows, today or datetime.date.today().isoformat())
+        if not checks:
+            return []
+        counts = self.query("SELECT " + ", ".join(sql for sql, _ in checks) + f" FROM {table}")[1][0]
+        found = []
+        for (sql, issue), n in zip(checks, counts):
+            if issue["issue"] == "same value in every row":
+                if n == 1:
+                    found.append(issue)
+            elif n:
+                found.append({**issue, "rows": n})
         return found
+
+
+PLACEHOLDERS = ("n/a", "na", "#n/a", "null", "none", "nil", "-", "--", "?", "unknown", "tbd", "missing")
+SENTINELS = (-9999999, -999999, -99999, -9999, -999, 999, 9999, 99999, 999999, 9999999)
+_AMOUNT = re.compile(r"amount|price|cost|revenue|sales|total|qty|quantity|units|paise|fare|fee", re.I)
+_NUMBER_TYPES = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "REAL", "NUMERIC")
+
+
+def _as_number(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def suspicious_checks(profile_rows, today):
+    """(SQL count expression, issue) pairs for values that look wrong. Decided from the profile, so the
+    data is read once for all of them. today: an ISO date, passed in so the check is testable."""
+    checks, placeholder_list = [], ", ".join(literal(v) for v in PLACEHOLDERS)
+    for r in profile_rows:
+        col, typ = r["column_name"], str(r["column_type"]).upper()
+        c, lo, hi = ident(col), r.get("min"), r.get("max")
+        if (r.get("approx_unique") or 0) <= 1 and (r.get("count") or 0) > 1 and float(r.get("null_percentage") or 0) < 100:
+            checks.append((f"count(DISTINCT {c})", {"column": col, "issue": "same value in every row"}))
+        if typ == "VARCHAR":
+            checks.append((f"count_if(lower(trim({c})) IN ({placeholder_list}))",
+                           {"column": col, "issue": "placeholder text like 'N/A', '-' or 'unknown'"}))
+        elif any(t in typ for t in _NUMBER_TYPES):
+            for v in {_as_number(lo), _as_number(hi)} & set(SENTINELS):
+                checks.append((f"count_if({c} = {v:g})", {"column": col, "issue": f"{v:g} may be a placeholder", "value": v}))
+            if _AMOUNT.search(col) and (_as_number(lo) or 0) < 0:
+                checks.append((f"count_if({c} < 0)", {"column": col, "issue": "negative values"}))
+        elif typ.startswith(("DATE", "TIMESTAMP")) and hi is not None and str(hi)[:10] > today:
+            checks.append((f"count_if(CAST({c} AS DATE) > DATE {literal(today)})",
+                           {"column": col, "issue": "dates in the future", "max": str(hi)[:19]}))
+    return checks
 
 
 def _file_key(path):

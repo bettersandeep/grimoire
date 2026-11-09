@@ -357,6 +357,12 @@ def profile(args, session_id=None, **kwargs):
             if dupes:
                 issues.insert(0, {"issue": "duplicate rows", "rows": dupes})
         store.set_json(db, f"issues:{dataset}", issues[:10])
+        try:
+            total = eng.row_count(_sql_ref(ref)) if source == "grimoire_sample" else rows[0].get("count") or 0
+            score = relations.health(rows, issues, total, eng.rejects(dataset)[0])
+            store.set_json(db, f"health:{dataset}", score)
+        except Exception:
+            score = None  # the score is extra; never lose the profile because of it
         remember(session_id, [row[2:] for row in compact])
         remember(session_id, issues)
         result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
@@ -373,6 +379,8 @@ def profile(args, session_id=None, **kwargs):
         if source == "grimoire_sample":
             result["sampled"] = (f"The table is large, so this profile describes a random sample of "
                                  f"{engine.SAMPLE_ROWS:,} rows. Use grimoire_query for exact counts.")
+        if score:
+            result["health"] = f"{score['score']}/100" + (f" ({', '.join(score['off'])})" if score["off"] else "")
         if issues:
             result["issues"] = issues
             result["issues_note"] = (
