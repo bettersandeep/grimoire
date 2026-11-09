@@ -53,6 +53,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Answers with SQL | DuckDB in memory; the model sees schemas and small results, never the rows |
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | After each reply: which numbers trace to query results, which are derived by simple arithmetic, and which have no source |
+| Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (an incomplete last month, an average of averages, a join that counts rows twice) and a verdict: ready to share, share with caveats, or needs revision |
 | Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, spelling variants ('North' and 'north ') |
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL |

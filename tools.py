@@ -6,6 +6,7 @@ import re
 import threading
 from collections import OrderedDict
 
+from . import audit
 from . import engine
 from . import guard
 from . import learning
@@ -116,17 +117,26 @@ def check_reply(text, session_id=None):
     cited = list(dict.fromkeys(re.findall(r"\bq(\d+)\b", text or "", re.I)))
     if not values and not cited:
         return ""  # Grimoire was not used here: do not open the database
-    db, _eng = _get()
-    totals = []
+    db, eng = _get()
+    totals, cited_queries = [], []
     for qid in cited:
         q = store.get_query(db, qid)
         if q:
+            cited_queries.append(q)
             values.extend(verify.numeric_values(q["rows"]))
             totals.extend(_column_totals(q["rows"]))
     if not values:
         return ""
     sourced, derived, unsourced = verify.check(text, values, ignore=ignore, totals=totals)
     out = verify.footer(sourced, unsourced, derived)
+    if out:
+        audited = cited_queries or [q for q in [store.get_query(db, last_qid)] if q] if last_qid else cited_queries
+        if audited:
+            try:
+                judged, lines = audit.review(audited, eng, unsourced)
+                out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
+            except Exception:
+                pass  # the audit is extra; never lose the number check because of it
     learn, predict = learning_state()
     if predict:
         with _lock:
