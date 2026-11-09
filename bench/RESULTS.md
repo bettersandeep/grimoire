@@ -1,5 +1,18 @@
 # Benchmark results (2026-11-09)
 
+## v0.19.7: sales data in US dollars
+
+The sales files now have an `amount_cents` column and the questions ask for US dollars (same seed, same values as before).
+8 questions on `sales_50k.csv`, one run each, free model `meituan/longcat-2.5:free`, 2026-11-09. Raw results: `results.jsonl`.
+
+| Setup | Correct | Input tokens (median) | Time (median) | Cost per answer* | Tool calls |
+|---|---|---|---|---|---|
+| Plain Hermes | 8/8 | 65,362 | 33 s | $0.0457 | 4 |
+| Hermes with Grimoire | 8/8 | 23,572 | 15 s | $0.0236 | 1 |
+| Data bot (Grimoire's tools only) | 8/8 | 4,436 | 16 s | $0.0128 | 1 |
+
+Number check: 15 of 16 Grimoire answers "ready to share"; the other wrote a stray 25,000 before correcting itself, and was flagged.
+
 ## v0.19.1: NYC taxi trips, 20.3M rows
 
 Real public data: NYC yellow taxi trips, January to June 2024, as 6 Parquet files (340 MB) and as one 2 GB CSV.

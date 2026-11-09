@@ -121,15 +121,17 @@ Like every Desktop plugin it starts off; turn it on under **Capabilities → Plu
 
 ## Benchmark
 
-Same 8 questions on the same free model, with and without Grimoire ([details](bench/RESULTS.md)):
+Same 8 questions on the same free model, with and without Grimoire ([details](bench/RESULTS.md)), measured on 2026-11-09 with Grimoire 0.19:
 
-| | Plain Hermes | With Grimoire 0.6 |
-|---|---|---|
-| API calls per answer | 5 | 2 |
-| Input tokens (median) | 61,051 | 23,300 (62% fewer) |
-| Time per answer | 30 s | 12 s (60% faster) |
-| Cost per answer, at $3/$15 per million | $0.050 | $0.024 (53% cheaper) |
-| Correct | 39 of 40 | 23 of 24; the wrong one (1,091 copied as 10,911) was flagged by the number check |
+| | Plain Hermes | Hermes with Grimoire | Data bot |
+|---|---|---|---|
+| Correct | 8 of 8 | 8 of 8 | 8 of 8 |
+| Input tokens (median) | 65,362 | 23,572 (64% fewer) | 4,436 (93% fewer) |
+| Time per answer | 33 s | 15 s | 16 s |
+| Cost per answer, at $3/$15 per million | $0.046 | $0.024 | $0.013 |
+| Tool calls | 4 | 1 | 1 |
+
+One Data bot answer wrote a stray "25,000" before correcting itself to 2,500 customers; the number check flagged it.
 
 Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above uses `sales_50k.csv` from it.
 
