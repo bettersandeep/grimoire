@@ -117,6 +117,22 @@ function Pending({ pending, act }) {
   ] })
 }
 
+function About({ show, act }) {
+  if (!show) return null
+  return jsxs('section', { className: 'gr-about', 'aria-label': 'What Grimoire does', children: [
+    jsxs('div', { className: 'gr-lean-text', children: [
+      jsx('b', { children: 'Ask questions about your data files, and check every number' }),
+      jsx('p', { children: 'Name a CSV, JSON, Parquet or SQLite file in any chat. Grimoire answers with a real SQL query and checks each number in the reply against it. It reads your files where they are and never changes them.' }),
+      jsxs('ul', { children: [
+        jsxs('li', { children: [jsx('b', { children: 'Files' }), ' are the files you named in chats, with problems Grimoire found in them.'] }),
+        jsxs('li', { children: [jsx('b', { children: 'Saved queries' }), ' are the answers: chart, table, the SQL, and how each answer was made.'] }),
+        jsxs('li', { children: ['Try in a chat: ', jsx('code', { children: 'What is the total revenue per region in ~/Downloads/sales.csv?' })] })
+      ] })
+    ] }),
+    jsx('button', { className: 'gr-btn gr-small', onClick: () => act.mutate({ path: '/settings', body: { hide_about: true } }), children: 'Got it' })
+  ] })
+}
+
 function LeanTip({ tip, act }) {
   if (!tip) return null
   return jsxs('section', { className: 'gr-lean', 'aria-label': 'Use fewer tokens', children: [
@@ -124,10 +140,10 @@ function LeanTip({ tip, act }) {
       jsx('b', { children: 'Use about a fifth of the tokens with a Data bot' }),
       jsx('p', { children: `Your data chats send ${fmt(tip.tools)} tools and about ${fmt(tip.tokens)} tokens with every model call. A bot with only Grimoire's tools sends about a fifth of that, and answers faster.` }),
       jsxs('ol', { children: [
-        jsxs('li', { children: ['Open ', jsx('b', { children: 'Bots' }), ', then ', jsx('b', { children: 'New Agent' }), '. Name it Data.'] }),
-        jsxs('li', { children: ['Open ', jsx('b', { children: 'Advanced' }), ' and clone from the profile that has Grimoire.'] }),
-        jsxs('li', { children: ['Under toolsets, keep only ', jsx('b', { children: 'Grimoire' }), ' and ', jsx('b', { children: 'Clarifying Questions' }), '.'] }),
-        jsx('li', { children: "Ask data questions in the Data bot's chat. Your main agent keeps all its tools." })
+        jsxs('li', { children: ['Open the ', jsx('b', { children: 'Bots' }), ' tab, click ', jsx('b', { children: '+' }), ', then ', jsx('b', { children: 'New bot' }), '. Name it data.'] }),
+        jsxs('li', { children: ['Click ', jsx('b', { children: 'Advanced' }), ' (below Description) and clone from the profile that has Grimoire.'] }),
+        jsxs('li', { children: ['Open ', jsx('b', { children: 'Capabilities' }), ', then ', jsx('b', { children: 'Toolsets' }), '. Switch off ', jsx('b', { children: 'All' }), ', then switch on ', jsx('b', { children: 'Grimoire' }), ' and ', jsx('b', { children: 'Clarifying Questions' }), '.'] }),
+        jsx('li', { children: "Click Create bot, then ask data questions in the data bot's chat. Your main agent keeps all its tools." })
       ] })
     ] }),
     jsx('button', { className: 'gr-btn gr-small', onClick: () => act.mutate({ path: '/settings', body: { hide_lean_tip: true } }), children: 'Hide' })
@@ -162,13 +178,14 @@ function issueText(i) {
 
 function Files({ datasets, act, filter, setFilter }) {
   const [armed, setArmed] = useState(null)
-  if (!datasets?.length) return jsx('p', { className: 'gr-empty', children: 'No data files yet. Ask Hermes a question about a CSV, JSON, Parquet or SQLite file.' })
+  if (!datasets?.length) return jsx('p', { className: 'gr-empty', children: 'No data files yet. Name a CSV, JSON, Parquet or SQLite file in a chat, and it shows here.' })
   return jsx('div', { className: 'gr-files', children: datasets.map((d) => jsxs('article', { className: 'gr-file', 'aria-current': filter === d.name || undefined, children: [
     jsxs('div', { className: 'gr-file-top', children: [
       jsx('button', { className: 'gr-link', onClick: () => setFilter(filter === d.name ? null : d.name), title: 'Show only this file\'s queries', children: d.name }),
       jsx('span', { className: 'gr-chip', children: d.kind }),
       d.health ? jsx('span', { className: 'gr-chip gr-health', 'data-level': d.health.score >= 90 ? 'good' : d.health.score >= 70 ? 'fair' : 'poor',
-        title: d.health.off.length ? `Health ${d.health.score}/100: ${d.health.off.join(', ')}` : 'No data problems found', children: `Health ${d.health.score}` }) : null,
+        title: d.health.off.length ? `Health ${d.health.score}/100: ${d.health.off.join(', ')}` : 'No data problems found', children: `Health ${d.health.score}` })
+        : jsx('span', { className: 'gr-chip', title: `Large file, so not checked yet. Ask in a chat: check the data quality of ${d.name}`, children: 'Not checked' }),
       d.missing ? jsx('span', { className: 'gr-chip gr-warn', children: 'file missing' }) : null,
       jsx('button', { className: 'gr-btn gr-small gr-push', 'data-armed': armed === d.name || undefined,
         onClick: () => { if (armed === d.name) { setArmed(null); act.mutate({ path: `/datasets/${d.name}/forget` }) } else setArmed(d.name) },
@@ -176,6 +193,9 @@ function Files({ datasets, act, filter, setFilter }) {
         children: armed === d.name ? 'Click again to delete' : 'Forget' })
     ] }),
     jsx('div', { className: 'gr-path', title: d.path, children: d.path }),
+    jsx('div', { className: 'gr-meta', children: [d.rows != null ? `${fmt(d.rows)}\u00a0rows` : null, d.added_at ? `added from a chat ${ago(d.added_at)}` : null,
+      `${d.queries || 0}\u00a0${d.queries === 1 ? 'query' : 'queries'}`].filter(Boolean).join(' · ') }),
+    d.health && !d.issues?.length ? jsx('div', { className: 'gr-meta', children: 'No problems found.' }) : null,
     d.issues?.length ? jsx(IssueChips, { issues: d.issues }) : null,
     d.merges?.length ? jsx('div', { className: 'gr-meta', children: 'Merges: ' + d.merges.map((m) => `${m.column} '${m.from}' → '${m.to}'`).join(' · ') }) : null,
     d.notes?.length ? jsx('div', { className: 'gr-meta', children: 'Notes: ' + d.notes.map((n) => `${n.column}: ${n.note}`).join(' · ') }) : null
@@ -203,102 +223,225 @@ export function ticks(n, width, labelPx) {
   return [...keep, n - 1]
 }
 
-function Line({ q, li, vi }) {
+/** A hover tooltip for one chart: bind(text) goes on each mark; tip is drawn over the chart. */
+function useTip() {
+  const [tip, setTip] = useState(null)
+  const bind = (text) => ({
+    onMouseMove: (e) => {
+      const box = e.currentTarget.closest('.gr-chart').getBoundingClientRect()
+      setTip({ x: e.clientX - box.left, y: e.clientY - box.top, text, right: e.clientX - box.left > box.width * 0.6 })
+    },
+    onMouseLeave: () => setTip(null)
+  })
+  const el = tip ? jsx('div', { className: 'gr-tip', 'data-right': tip.right || undefined, style: { left: tip.x, top: tip.y }, children: tip.text }) : null
+  return [el, bind]
+}
+
+const chart = (tip, svg) => jsxs('div', { className: 'gr-chart', children: [svg, tip] })
+
+function axis(lo, hi, L, W, y) {
+  return [lo, (lo + hi) / 2, hi].map((v, i) => jsxs('g', { children: [
+    jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
+    jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
+  ] }, 'g' + i))
+}
+
+/** Line or area over time (or any ordered label). */
+function Line({ q, li, vi, area }) {
+  const [tip, bind] = useTip()
   const rows = q.rows.filter((r) => isNum(r[vi]) && r[li] !== null).sort((a, b) => String(a[li]).localeCompare(String(b[li]))).slice(0, 120)
   const vals = rows.map((r) => r[vi])
   const lo = Math.min(0, ...vals), hi = Math.max(...vals) || 1
-  const marks = [lo, (lo + hi) / 2, hi]
-  const W = 560, H = 190, B = 22, L = 14 + 7 * Math.max(...marks.map((v) => compact(v).length))
+  const W = 560, H = 200, B = 22, L = 14 + 7 * Math.max(...[lo, hi].map((v) => compact(v).length))
   const x = (i) => L + (W - L - 10) * (i / Math.max(1, rows.length - 1))
   const y = (v) => 8 + (H - B - 8) * (1 - (v - lo) / (hi - lo || 1))
-  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${q.columns[vi]} over ${q.columns[li]}`, children: [
-    ...marks.map((v, i) => jsxs('g', { children: [
-      jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
-      jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
-    ] }, 'g' + i)),
-    jsx('polyline', { points: vals.map((v, i) => `${x(i)},${y(v)}`).join(' '), className: 'gr-path-line' }, 'p'),
-    ...rows.map((r, i) => jsx('circle', { cx: x(i), cy: y(r[vi]), r: 2.5, className: 'gr-dot', children: jsx('title', { children: `${r[li]}: ${fmt(r[vi])}` }) }, 'd' + i)),
+  const pts = vals.map((v, i) => `${x(i)},${y(v)}`).join(' ')
+  const slot = (W - L - 10) / Math.max(1, rows.length - 1)
+  return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${q.columns[vi]} over ${q.columns[li]}`, children: [
+    ...axis(lo, hi, L, W, y),
+    area ? jsx('polygon', { points: `${x(0)},${y(lo)} ${pts} ${x(rows.length - 1)},${y(lo)}`, className: 'gr-area' }, 'a') : null,
+    jsx('polyline', { points: pts, className: 'gr-path-line' }, 'p'),
+    ...rows.map((r, i) => jsx('circle', { cx: x(i), cy: y(r[vi]), r: rows.length > 40 ? 2 : 4, className: 'gr-dot' }, 'd' + i)),
+    ...rows.map((r, i) => jsx('rect', { x: x(i) - slot / 2, y: 0, width: slot, height: H - B, className: 'gr-hit', ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`) }, 'h' + i)),
     ...ticks(rows.length, W - L - 10, 7 * Math.max(...rows.map((r) => String(r[li]).slice(0, 10).length))).map((i) =>
       jsx('text', { x: x(i), y: H - 5, textAnchor: i === 0 ? 'start' : i === rows.length - 1 ? 'end' : 'middle', className: 'gr-tick', children: String(rows[i][li]).slice(0, 10) }, 't' + i))
-  ] })
+  ] }))
+}
+
+/** Horizontal bars: the default for categories. */
+function Bars({ q, li, vi }) {
+  const [tip, bind] = useTip()
+  const rows = q.rows.filter((r) => isNum(r[vi])).slice(0, 25)
+  const top = Math.max(...rows.map((r) => Math.abs(r[vi]))) || 1
+  return chart(tip, jsx('div', { className: 'gr-bars', role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: rows.map((r, i) => jsxs('div', { className: 'gr-bar-row', ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`), children: [
+    jsx('span', { className: 'gr-bar-label', children: fmt(r[li]) }),
+    jsx('span', { className: 'gr-bar-track', children: jsx('span', { className: 'gr-bar', 'data-neg': r[vi] < 0 || undefined, style: { width: `${(Math.abs(r[vi]) / top) * 100}%` } }) }),
+    jsx('span', { className: 'gr-bar-value', children: Math.abs(r[vi]) >= 10000 ? compact(r[vi]) : fmt(r[vi]) })
+  ] }, i)) }))
+}
+
+/** Vertical columns. */
+function Columns({ q, li, vi }) {
+  const [tip, bind] = useTip()
+  const rows = q.rows.filter((r) => isNum(r[vi])).slice(0, 60)
+  const vals = rows.map((r) => r[vi]), lo = Math.min(0, ...vals), hi = Math.max(0, ...vals) || 1
+  const W = 560, H = 210, B = 22, L = 14 + 7 * Math.max(...[lo, hi].map((v) => compact(v).length))
+  const bw = (W - L - 10) / rows.length, y = (v) => 8 + (H - B - 8) * (1 - (v - lo) / (hi - lo || 1))
+  const labels = rows.map((r) => String(fmt(r[li])).slice(0, 10))
+  const shown = ticks(rows.length, W - L - 10 - bw, 7 * Math.max(...labels.map((t) => t.length)))
+  return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: [
+    ...axis(lo, hi, L, W, y),
+    ...rows.map((r, i) => jsx('rect', { x: L + bw * i + 1, y: Math.min(y(r[vi]), y(0)), width: Math.max(1, bw - 2), height: Math.abs(y(0) - y(r[vi])), rx: 3,
+      className: r[vi] < 0 ? 'gr-col gr-neg' : 'gr-col', ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`) }, 'c' + i)),
+    ...shown.map((i) => jsx('text', { x: L + bw * i + bw / 2, y: H - 5, textAnchor: 'middle', className: 'gr-tick', children: labels[i] }, 't' + i))
+  ] }))
+}
+
+/** Parts of a whole: a donut with a legend, for up to 6 positive values. */
+function Donut({ q, li, vi }) {
+  const [tip, bind] = useTip()
+  const rows = q.rows.filter((r) => isNum(r[vi]) && r[vi] > 0)
+  const total = rows.reduce((a, r) => a + r[vi], 0) || 1
+  const R = 80, r0 = 50, C = 100
+  let angle = -Math.PI / 2
+  const arcs = rows.map((r, i) => {
+    const a0 = angle, a1 = angle + (2 * Math.PI * r[vi]) / total
+    angle = a1
+    const big = a1 - a0 > Math.PI ? 1 : 0, p = (a, rad) => `${C + rad * Math.cos(a)},${C + rad * Math.sin(a)}`
+    const d = rows.length === 1 ? `M${C - R},${C}a${R},${R} 0 1,0 ${2 * R},0a${R},${R} 0 1,0 ${-2 * R},0M${C - r0},${C}a${r0},${r0} 0 1,1 ${2 * r0},0a${r0},${r0} 0 1,1 ${-2 * r0},0`
+      : `M${p(a0, R)}A${R},${R} 0 ${big},1 ${p(a1, R)}L${p(a1, r0)}A${r0},${r0} 0 ${big},0 ${p(a0, r0)}Z`
+    return jsx('path', { d, className: `gr-slice gr-s${i + 1}`, ...bind(`${fmt(r[li])}: ${fmt(r[vi])} (${((100 * r[vi]) / total).toFixed(1)}%)`) }, i)
+  })
+  return chart(tip, jsxs('div', { className: 'gr-donut', children: [
+    jsxs('svg', { viewBox: '0 0 200 200', role: 'img', 'aria-label': `Share of ${q.columns[vi]} by ${q.columns[li]}`, children: [
+      ...arcs,
+      jsx('text', { x: C, y: C - 2, textAnchor: 'middle', className: 'gr-donut-total', children: compact(total) }, 'n'),
+      jsx('text', { x: C, y: C + 16, textAnchor: 'middle', className: 'gr-tick', children: 'total' }, 'l')
+    ] }),
+    jsx('ul', { className: 'gr-legend', children: rows.map((r, i) => jsxs('li', { children: [
+      jsx('span', { className: `gr-swatch gr-s${i + 1}` }), jsx('span', { children: fmt(r[li]) }),
+      jsx('b', { children: `${((100 * r[vi]) / total).toFixed(1)}%` })
+    ] }, i)) })
+  ] }))
 }
 
 // Heatmap, histogram and scatter: the plugin's Python picks the chart and orders the data; drawn here.
 function Heatmap({ c }) {
+  const [tip, bind] = useTip()
   const vals = c.cells.map((t) => t[2]), lo = Math.min(...vals), hi = Math.max(...vals)
   const W = 560, CH = 20, TOP = 20, L = 12 + 7 * Math.max(...c.ys.map((v) => v.slice(0, 14).length))
   const cw = (W - L - 4) / c.xs.length, H = TOP + CH * c.ys.length
   const every = Math.max(1, Math.ceil((7 * Math.max(...c.xs.map((v) => v.slice(0, 8).length))) / Math.max(1, cw - 4)))
-  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H + 20}`, role: 'img', 'aria-label': `${c.value} by ${c.x} and ${c.y}`, children: [
+  const step = (v) => Math.min(6, Math.floor((7 * (v - lo)) / (hi - lo || 1)))
+  return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H + 24}`, role: 'img', 'aria-label': `${c.value} by ${c.x} and ${c.y}`, children: [
     ...c.xs.map((v, i) => (i % every === 0 ? jsx('text', { x: L + cw * i + cw / 2, y: 13, textAnchor: 'middle', className: 'gr-tick', children: v.slice(0, 8) }, 'x' + i) : null)),
     ...c.ys.map((v, j) => jsx('text', { x: L - 6, y: TOP + CH * j + 14, textAnchor: 'end', className: 'gr-tick', children: v.slice(0, 14) }, 'y' + j)),
-    ...c.cells.map(([i, j, v], n) => jsx('rect', { x: L + cw * i + 1, y: TOP + CH * j + 1, width: Math.max(1, cw - 2), height: CH - 2, rx: 2, className: 'gr-cell',
-      fillOpacity: 0.12 + 0.88 * ((v - lo) / (hi - lo || 1)), children: jsx('title', { children: `${c.xs[i]}, ${c.ys[j]}: ${fmt(v)}` }) }, 'c' + n)),
-    jsx('text', { x: L, y: H + 15, className: 'gr-tick', children: `Stronger color = more ${c.value}: from ${fmt(lo)} to ${fmt(hi)}.` }, 'legend')
-  ] })
+    ...c.cells.map(([i, j, v], n) => jsx('rect', { x: L + cw * i + 1, y: TOP + CH * j + 1, width: Math.max(1, cw - 2), height: CH - 2, rx: 2,
+      className: `gr-heat gr-h${step(v)}`, ...bind(`${c.xs[i]}, ${c.ys[j]}: ${fmt(v)}`) }, 'c' + n)),
+    ...[0, 1, 2, 3, 4, 5, 6].map((k) => jsx('rect', { x: L + 14 * k, y: H + 8, width: 12, height: 10, rx: 2, className: `gr-heat gr-h${k}` }, 'k' + k)),
+    jsx('text', { x: L + 14 * 7 + 6, y: H + 17, className: 'gr-tick', children: `${c.value}: ${fmt(lo)} to ${fmt(hi)}` }, 'legend')
+  ] }))
 }
 
 function Histogram({ c }) {
-  const top = Math.max(...c.counts) || 1, marks = [0, top / 2, top]
-  const W = 560, H = 190, B = 22, L = 14 + 7 * Math.max(...marks.map((v) => compact(v).length))
+  const [tip, bind] = useTip()
+  const top = Math.max(...c.counts) || 1
+  const W = 560, H = 190, B = 22, L = 14 + 7 * compact(top).length
   const bw = (W - L - 10) / c.counts.length, y = (v) => 8 + (H - B - 8) * (1 - v / top)
   const shown = ticks(c.starts.length, W - L - 10, 7 * Math.max(...c.starts.map((v) => compact(v).length))).filter((i) => i < c.starts.length - 1)
-  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${c.y} per bucket of ${c.x}`, children: [
-    ...marks.map((v, i) => jsxs('g', { children: [
-      jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
-      jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
-    ] }, 'g' + i)),
-    ...c.counts.map((n, i) => jsx('rect', { x: L + bw * i + 1, y: y(n), width: Math.max(1, bw - 2), height: Math.max(0, y(0) - y(n)), rx: 2, className: 'gr-cell',
-      children: jsx('title', { children: `${fmt(c.starts[i])} to ${fmt(c.starts[i] + c.step)}: ${fmt(n)}` }) }, 'b' + i)),
+  return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${c.y} per bucket of ${c.x}`, children: [
+    ...axis(0, top, L, W, y),
+    ...c.counts.map((n, i) => jsx('rect', { x: L + bw * i + 1, y: y(n), width: Math.max(1, bw - 2), height: Math.max(0, y(0) - y(n)), rx: 2, className: 'gr-col',
+      ...bind(`${fmt(c.starts[i])} to ${fmt(c.starts[i] + c.step)}: ${fmt(n)}`) }, 'b' + i)),
     ...shown.map((i) => jsx('text', { x: L + bw * i, y: H - 5, textAnchor: i === 0 ? 'start' : 'middle', className: 'gr-tick', children: compact(c.starts[i]) }, 't' + i))
-  ] })
+  ] }))
 }
 
 function Scatter({ c }) {
+  const [tip, bind] = useTip()
   const xs = c.points.map((p) => p[0]), ys = c.points.map((p) => p[1])
   const xlo = Math.min(...xs), xhi = Math.max(...xs), ylo = Math.min(0, ...ys), yhi = Math.max(...ys)
-  const W = 560, H = 230, B = 40, TOP = 22, L = 14 + 7 * Math.max(...[ylo, (ylo + yhi) / 2, yhi].map((v) => compact(v).length))
+  const W = 560, H = 230, B = 40, TOP = 22, L = 14 + 7 * Math.max(...[ylo, yhi].map((v) => compact(v).length))
   const x = (v) => L + 6 + (W - L - 20) * ((v - xlo) / (xhi - xlo || 1)), y = (v) => TOP + (H - B - TOP) * (1 - (v - ylo) / (yhi - ylo || 1))
-  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${c.y} against ${c.x}`, children: [
-    ...[ylo, (ylo + yhi) / 2, yhi].map((v, i) => jsxs('g', { children: [
-      jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
-      jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
-    ] }, 'g' + i)),
+  return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${c.y} against ${c.x}`, children: [
+    ...axis(ylo, yhi, L, W, y),
     ...[xlo, (xlo + xhi) / 2, xhi].map((v, i) => jsx('text', { x: x(v), y: H - 22, textAnchor: 'middle', className: 'gr-tick', children: compact(v) }, 'x' + i)),
     jsx('text', { x: L, y: 12, className: 'gr-tick', children: `${c.y} ↑` }, 'yn'),
     jsx('text', { x: (L + W) / 2, y: H - 4, textAnchor: 'middle', className: 'gr-tick', children: `${c.x} →` }, 'xn'),
-    ...c.points.map(([a, b], i) => jsx('circle', { cx: x(a), cy: y(b), r: 4, className: 'gr-pt', children: jsx('title', { children: `${c.x} ${fmt(a)}, ${c.y} ${fmt(b)}` }) }, 'p' + i))
-  ] })
+    ...c.points.map(([a, b], i) => jsx('circle', { cx: x(a), cy: y(b), r: 4, className: 'gr-pt', ...bind(`${c.x} ${fmt(a)}, ${c.y} ${fmt(b)}`) }, 'p' + i))
+  ] }))
 }
 
 const CHARTS = { heatmap: Heatmap, histogram: Histogram, scatter: Scatter }
+const KINDS = { bars: ['Bars', Bars], columns: ['Columns', Columns], line: ['Line', Line], area: ['Area', (p) => jsx(Line, { ...p, area: true })], donut: ['Donut', Donut] }
 
-function Bars({ q }) {
-  const pick = chartColumns(q.columns, q.rows)
-  if (!pick) return null
-  const [li, vi] = pick
-  if (isTime(q.rows.map((r) => r[li]))) return jsx(Line, { q, li, vi })
-  const rows = q.rows.filter((r) => isNum(r[vi])).slice(0, 25)
-  const top = Math.max(...rows.map((r) => Math.abs(r[vi]))) || 1
-  return jsx('div', { className: 'gr-bars', role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: rows.map((r, i) => jsxs('div', { className: 'gr-bar-row', children: [
-    jsx('span', { className: 'gr-bar-label', title: String(r[li]), children: fmt(r[li]) }),
-    jsx('span', { className: 'gr-bar-track', children: jsx('span', { className: 'gr-bar', style: { width: `${(Math.abs(r[vi]) / top) * 100}%` } }) }),
-    jsx('span', { className: 'gr-bar-value', title: fmt(r[vi]), children: Math.abs(r[vi]) >= 10000 ? compact(r[vi]) : fmt(r[vi]) })
-  ] }, i)) })
+/** Chart types that fit a label-and-number result, best first. */
+export function chartKinds(q, li, vi) {
+  const labels = q.rows.map((r) => r[li])
+  if (isTime(labels)) return ['line', 'area', 'columns']
+  const vals = q.rows.map((r) => r[vi]).filter(isNum)
+  const donut = q.rows.length <= 6 && vals.length === q.rows.length && vals.every((v) => v > 0)
+  return ['bars', 'columns', ...(donut ? ['donut'] : []), 'line']
 }
 
-function Result({ q }) {
-  if (q.rows.length === 1 && q.columns.length <= 4 && q.rows[0].every((v) => isNum(v) || v === null))
-    return jsx('div', { className: 'gr-kpis', children: q.columns.map((c, i) => jsxs('div', { className: 'gr-kpi', children: [jsx('b', { children: fmt(q.rows[0][i]) }), jsx('span', { children: c })] }, c)) })
-  const numeric = q.columns.map((_, i) => q.rows.length > 0 && q.rows.every((r) => isNum(r[i]) || r[i] === null))
+const measures = (q, li) => q.columns.map((_, i) => i).filter((i) => i !== li && q.rows.every((r) => isNum(r[i]) || r[i] === null) && q.rows.some((r) => isNum(r[i])))
+
+function Picker({ label, options, value, onChange }) {
+  return jsxs('div', { className: 'gr-picker', role: 'radiogroup', 'aria-label': label, children: [
+    jsx('span', { className: 'gr-picker-label', children: label }),
+    ...options.map(([v, text]) => jsx('button', { role: 'radio', 'aria-checked': v === value, className: 'gr-chip gr-opt', onClick: () => onChange(v), children: text }, v))
+  ] })
+}
+
+function ChartView({ q }) {
+  const pick = chartColumns(q.columns, q.rows)
+  const [kind, setKind] = useState(null)
+  const [measure, setMeasure] = useState(null)
+  if (CHARTS[q.chart?.kind]) return jsx(CHARTS[q.chart.kind], { c: q.chart })
+  if (!pick) return null
+  const li = pick[0], all = measures(q, li), vi = all.includes(measure) ? measure : pick[1]
+  const kinds = chartKinds(q, li, vi), k = kinds.includes(kind) ? kind : kinds[0]
   return jsxs('div', { children: [
-    CHARTS[q.chart?.kind] ? jsx(CHARTS[q.chart.kind], { c: q.chart }) : jsx(Bars, { q }),
+    jsxs('div', { className: 'gr-pickers', children: [
+      jsx(Picker, { label: 'Chart', options: kinds.map((v) => [v, KINDS[v][0]]), value: k, onChange: setKind }),
+      all.length > 1 ? jsx(Picker, { label: 'Show', options: all.map((i) => [i, q.columns[i]]), value: vi, onChange: setMeasure }) : null
+    ] }),
+    jsx(KINDS[k][1], { q, li, vi })
+  ] })
+}
+
+export const hasChart = (q) => !!(CHARTS[q.chart?.kind] || chartColumns(q.columns, q.rows))
+
+/** Decimals for each number column: as many as its values need, at most 2, the same on every row. */
+export function decimals(rows, i) {
+  let d = 0
+  for (const r of rows) if (isNum(r[i]) && !Number.isInteger(r[i])) d = Math.max(d, Math.min(2, (String(r[i]).split('.')[1] || '').length))
+  return d
+}
+
+function Table({ q }) {
+  const numeric = q.columns.map((_, i) => q.rows.length > 0 && q.rows.every((r) => isNum(r[i]) || r[i] === null))
+  const dec = q.columns.map((_, i) => (numeric[i] ? decimals(q.rows, i) : 0))
+  const top = q.columns.map((_, i) => (numeric[i] && q.rows.length > 1 ? Math.max(...q.rows.map((r) => Math.abs(r[i] || 0))) : 0))
+  const cell = (v, i) => {
+    if (!numeric[i] || !isNum(v)) return jsx('td', { children: fmt(v) }, i)
+    const text = v.toLocaleString('en-US', { minimumFractionDigits: dec[i], maximumFractionDigits: dec[i] })
+    return jsx('td', { className: 'gr-num', 'data-neg': v < 0 || undefined,
+      style: top[i] ? { '--w': `${(Math.abs(v) / top[i]) * 100}%` } : undefined, children: text }, i)
+  }
+  return jsxs('div', { children: [
     jsx('div', { className: 'gr-table-wrap', children: jsxs('table', { className: 'gr-table', children: [
       jsx('thead', { children: jsx('tr', { children: q.columns.map((c, i) => jsx('th', { className: numeric[i] ? 'gr-num' : '', children: c }, i)) }) }),
-      jsx('tbody', { children: q.rows.map((r, n) => jsx('tr', { children: r.map((v, i) => jsx('td', { className: numeric[i] ? 'gr-num' : '', children: fmt(v) }, i)) }, n)) })
+      jsx('tbody', { children: q.rows.map((r, n) => jsx('tr', { children: r.map(cell) }, n)) })
     ] }) }),
     q.total_rows > q.rows.length || q.truncated ? jsx('p', { className: 'gr-muted', children: `Showing ${q.rows.length} of ${q.truncated ? 'more than ' : ''}${fmt(q.total_rows)} rows.` }) : null
   ] })
+}
+
+const isKpi = (q) => q.rows.length === 1 && q.columns.length <= 4 && q.rows[0].every((v) => isNum(v) || v === null)
+
+function Kpis({ q }) {
+  return jsx('div', { className: 'gr-kpis', children: q.columns.map((c, i) => jsxs('div', { className: 'gr-kpi', children: [jsx('b', { children: fmt(q.rows[0][i]) }), jsx('span', { children: c })] }, c)) })
 }
 
 function Explain({ id }) {
@@ -309,24 +452,28 @@ function Explain({ id }) {
 }
 
 function Detail({ q }) {
-  const [explain, setExplain] = useState(false)
+  const tabs = [...(isKpi(q) ? [['result', 'Result']] : hasChart(q) ? [['chart', 'Chart']] : []),
+    ...(isKpi(q) ? [] : [['table', 'Table']]), ['sql', 'SQL'], ['explain', 'How it was made']]
+  const [tab, setTab] = useState(tabs[0][0])
   const copy = () => navigator.clipboard.writeText(q.sql).then(
     () => host.notify({ kind: 'success', message: `Copied the SQL of ${q.id}` }),
     () => host.notify({ kind: 'error', message: 'Could not copy. Select the SQL and copy it.' }))
   return jsxs('div', { className: 'gr-detail', children: [
     jsxs('div', { className: 'gr-detail-head', children: [
       jsx('span', { className: 'gr-qid', children: q.id }),
-      jsx('h2', { children: q.purpose || 'Query' })
+      jsx('h2', { children: q.purpose || 'Query' }),
+      jsx('button', { className: 'gr-btn gr-small gr-push', onClick: copy, title: 'Copy the SQL behind these numbers', children: 'Copy SQL' })
     ] }),
     q.question ? jsx('p', { className: 'gr-question', children: `“${q.question}”` }) : null,
-    jsx(Result, { q }),
-    jsxs('div', { className: 'gr-sql-head', children: [
-      jsx('span', { children: 'SQL behind these numbers' }),
-      jsx('button', { className: 'gr-btn gr-small', onClick: copy, children: 'Copy' }),
-      jsx('button', { className: 'gr-btn gr-small', 'aria-expanded': explain, onClick: () => setExplain(!explain), children: explain ? 'Hide explanation' : 'Explain' })
+    jsx('div', { className: 'gr-tabs', role: 'tablist', 'aria-label': 'Query views', children: tabs.map(([id, label]) =>
+      jsx('button', { role: 'tab', 'aria-selected': tab === id, className: 'gr-tab', onClick: () => setTab(id), children: label }, id)) }),
+    jsxs('div', { role: 'tabpanel', className: 'gr-panel', children: [
+      tab === 'result' ? jsx(Kpis, { q }) : null,
+      tab === 'chart' ? jsx(ChartView, { q }) : null,
+      tab === 'table' ? jsx(Table, { q }) : null,
+      tab === 'sql' ? jsx('pre', { className: 'gr-sql', children: q.sql }) : null,
+      tab === 'explain' ? jsx(Explain, { id: q.id }) : null
     ] }),
-    jsx('pre', { className: 'gr-sql', children: q.sql }),
-    explain ? jsx(Explain, { id: q.id }) : null,
     jsx('p', { className: 'gr-muted', children: `${ago(q.created_at)} · ${q.datasets.join(', ') || 'unknown file'} · type /grimoire rerun ${q.id} in chat to check it still holds` })
   ] })
 }
@@ -357,6 +504,7 @@ function GrimoirePage() {
     jsx(Header, { summary: summary.data, act }),
     summary.error ? jsx('p', { className: 'gr-error gr-pad', children: `Grimoire is not reachable: ${errorText(summary.error)}. Check that the plugin is enabled.` }) : null,
     jsxs('main', { className: 'gr-body', children: [
+      jsx(About, { show: summary.data?.about, act }),
       jsx(Pending, { pending: summary.data?.pending, act }),
       jsx(LeanTip, { tip: summary.data?.lean_tip, act }),
       jsxs('section', { children: [jsx('h3', { className: 'gr-h', children: 'Files' }), jsx(Files, { datasets: summary.data?.datasets, act, filter, setFilter })] }),
@@ -373,6 +521,10 @@ function GrimoirePage() {
 }
 
 const CSS = `
+.gr-page{--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--neg:#e34948;
+--h0:#cde2fb;--h1:#9ec5f4;--h2:#6da7ec;--h3:#3987e5;--h4:#256abf;--h5:#184f95;--h6:#0d366b}
+:root[data-hermes-mode=dark] .gr-page{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--neg:#e66767;
+--h0:#0d366b;--h1:#104281;--h2:#184f95;--h3:#256abf;--h4:#3987e5;--h5:#6da7ec;--h6:#b7d3f6}
 .gr-page{height:100%;min-height:0;display:flex;flex-direction:column;color:var(--foreground);font-size:13px;overflow:hidden;container-type:inline-size}
 .gr-page *{box-sizing:border-box}.gr-page :focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
 .gr-muted{color:var(--ui-text-tertiary);font-size:12px;margin:8px 0 0}.gr-error{color:var(--ui-red,var(--ui-error,var(--foreground)))}.gr-pad{padding:0 20px}
@@ -394,6 +546,9 @@ const CSS = `
 .gr-body{flex:1;min-height:0;overflow:auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:18px}
 .gr-h{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--ui-text-secondary);display:flex;align-items:center;gap:8px}
 .gr-pending{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:8px;border:1px solid color-mix(in srgb,var(--ui-accent) 40%,transparent);background:color-mix(in srgb,var(--ui-accent) 8%,transparent)}
+.gr-about{display:flex;gap:16px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid color-mix(in srgb,var(--s1) 35%,transparent);background:color-mix(in srgb,var(--s1) 6%,transparent)}
+.gr-about p{margin:4px 0 0;color:var(--ui-text-secondary)}.gr-about ul{margin:6px 0 0;padding-left:18px;color:var(--ui-text-secondary);display:flex;flex-direction:column;gap:2px}
+.gr-about b{font-weight:600}.gr-about li b{color:var(--foreground);font-weight:500}.gr-about code{font:12px var(--font-mono,ui-monospace,monospace);color:var(--foreground)}
 .gr-lean{display:flex;gap:16px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid var(--ui-stroke-secondary)}
 .gr-lean-text{flex:1;min-width:0}.gr-lean p{margin:4px 0 0;color:var(--ui-text-secondary)}.gr-lean ol{margin:6px 0 0;padding-left:20px;color:var(--ui-text-secondary);display:flex;flex-direction:column;gap:2px}
 .gr-lean ol b{color:var(--foreground);font-weight:500}
@@ -413,7 +568,7 @@ const CSS = `
 .gr-health[data-level=good]{color:var(--ui-green,var(--ui-text-secondary))}.gr-health[data-level=fair]{color:var(--ui-yellow,var(--ui-text-secondary))}.gr-health[data-level=poor]{color:var(--ui-red,var(--foreground))}
 .gr-warn{color:var(--ui-red,var(--foreground))}.gr-metric{font-family:var(--font-mono,ui-monospace,monospace);white-space:normal}.gr-metric b{font-weight:600;margin-right:2px;color:var(--foreground)}.gr-filter{cursor:pointer}
 .gr-meta{font-size:12px;color:var(--ui-text-tertiary);overflow-wrap:anywhere}
-.gr-grow{flex:1;min-height:320px;display:flex;flex-direction:column}
+.gr-grow{flex:1;min-height:560px;display:flex;flex-direction:column}
 .gr-split{flex:1;min-height:0;display:flex;border:1px solid var(--ui-stroke-secondary);border-radius:8px;overflow:hidden}
 .gr-list{width:min(38%,340px);min-width:200px;overflow:auto;border-right:1px solid var(--ui-stroke-secondary)}
 .gr-item{display:block;width:100%;text-align:left;padding:9px 12px;border:0;border-bottom:1px solid var(--ui-stroke-secondary);background:transparent;color:inherit;font:inherit;cursor:pointer}
@@ -422,21 +577,42 @@ const CSS = `
 .gr-item-sub{display:block;margin-top:3px;font-size:11px;color:var(--ui-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gr-qid{flex:none;font:600 11px var(--font-mono,ui-monospace,monospace);color:var(--ui-accent)}
 .gr-detail{flex:1;min-width:0;overflow:auto;padding:16px 20px}
-.gr-detail-head{display:flex;gap:8px;align-items:baseline}.gr-detail-head h2{margin:0;font-size:16px;font-weight:600;overflow-wrap:anywhere}
+.gr-detail-head{display:flex;gap:8px;align-items:baseline;min-width:0}.gr-detail-head h2{margin:0;font-size:16px;font-weight:600;overflow-wrap:anywhere}
 .gr-question{margin:4px 0 12px;color:var(--ui-text-secondary)}
 .gr-kpis{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}.gr-kpi{display:flex;flex-direction:column;padding:10px 14px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;min-width:130px}
 .gr-kpi b{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}.gr-kpi span{font-size:12px;color:var(--ui-text-tertiary)}
 .gr-bars{display:grid;grid-template-columns:minmax(60px,max-content) minmax(80px,1fr) max-content;gap:4px 10px;align-items:center;margin:10px 0;max-width:640px}
 .gr-bar-row{display:contents}.gr-bar-label{text-align:right;color:var(--ui-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}
-.gr-bar-track{height:12px}.gr-bar{display:block;height:100%;min-width:2px;border-radius:2px;background:var(--ui-accent)}
 .gr-bar-value{font-variant-numeric:tabular-nums;color:var(--ui-text-secondary);font-size:12px}
-.gr-cell{fill:var(--ui-accent)}.gr-pt{fill:var(--ui-accent);stroke:var(--background);stroke-width:2}
-.gr-line{width:100%;max-width:640px;margin:10px 0;display:block}.gr-path-line{fill:none;stroke:var(--ui-accent);stroke-width:2}
-.gr-dot{fill:var(--ui-accent)}.gr-grid{stroke:var(--ui-stroke-secondary)}.gr-tick{fill:var(--ui-text-tertiary);font-size:11px}
+.gr-tabs{display:flex;gap:2px;border-bottom:1px solid var(--ui-stroke-secondary);margin:4px 0 12px}
+.gr-tab{border:0;background:none;font:inherit;color:var(--ui-text-secondary);padding:7px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.gr-tab:hover{color:var(--foreground)}.gr-tab[aria-selected=true]{color:var(--foreground);border-bottom-color:var(--s1);font-weight:500}
+.gr-pickers{display:flex;flex-wrap:wrap;gap:6px 16px;margin-bottom:6px}.gr-picker{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.gr-picker-label{font-size:11px;color:var(--ui-text-tertiary);margin-right:2px}.gr-opt{cursor:pointer;padding:2px 9px}
+.gr-opt[aria-checked=true]{background:color-mix(in srgb,var(--s1) 20%,transparent);color:var(--foreground)}
+.gr-chart{position:relative;max-width:640px;margin:6px 0}.gr-chart svg{width:100%;display:block}
+.gr-tip{position:absolute;z-index:2;pointer-events:none;transform:translate(12px,-120%);padding:4px 8px;border-radius:6px;font-size:12px;white-space:nowrap;
+background:var(--background);color:var(--foreground);border:1px solid var(--ui-stroke-secondary);box-shadow:0 4px 14px rgba(0,0,0,.18);font-variant-numeric:tabular-nums}
+.gr-tip[data-right]{transform:translate(calc(-100% - 12px),-120%)}
+.gr-hit{fill:transparent}.gr-grid{stroke:var(--ui-stroke-secondary)}.gr-tick{fill:var(--ui-text-tertiary);font-size:11px}
+.gr-path-line{fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round}.gr-area{fill:color-mix(in srgb,var(--s1) 18%,transparent)}
+.gr-dot{fill:var(--s1);stroke:var(--background);stroke-width:1.5}.gr-col{fill:var(--s1)}.gr-col:hover,.gr-pt:hover,.gr-heat:hover,.gr-slice:hover{opacity:.8}
+.gr-neg{fill:var(--neg)}.gr-pt{fill:var(--s1);stroke:var(--background);stroke-width:2}
+.gr-heat.gr-h0{fill:var(--h0)}.gr-heat.gr-h1{fill:var(--h1)}.gr-heat.gr-h2{fill:var(--h2)}.gr-heat.gr-h3{fill:var(--h3)}.gr-heat.gr-h4{fill:var(--h4)}.gr-heat.gr-h5{fill:var(--h5)}.gr-heat.gr-h6{fill:var(--h6)}
+.gr-bar-track{height:14px}.gr-bar{display:block;height:100%;min-width:2px;border-radius:0 4px 4px 0;background:var(--s1)}.gr-bar[data-neg]{background:var(--neg)}
+.gr-bar-row:hover .gr-bar{opacity:.8}
+.gr-donut{display:flex;align-items:center;gap:20px;flex-wrap:wrap}.gr-donut svg{width:200px;flex:none}
+.gr-slice{stroke:var(--background);stroke-width:2}.gr-donut-total{fill:var(--foreground);font-size:20px;font-weight:600}
+.gr-legend{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ui-text-secondary)}
+.gr-legend li{display:flex;align-items:center;gap:8px}.gr-legend b{margin-left:auto;padding-left:12px;font-weight:500;color:var(--foreground);font-variant-numeric:tabular-nums}
+.gr-swatch{width:10px;height:10px;border-radius:3px;flex:none}
+.gr-s1{fill:var(--s1);background:var(--s1)}.gr-s2{fill:var(--s2);background:var(--s2)}.gr-s3{fill:var(--s3);background:var(--s3)}
+.gr-s4{fill:var(--s4);background:var(--s4)}.gr-s5{fill:var(--s5);background:var(--s5)}.gr-s6{fill:var(--s6);background:var(--s6)}
+.gr-table td.gr-num[style]{background:linear-gradient(to left,color-mix(in srgb,var(--s1) 14%,transparent) var(--w),transparent var(--w))}
+.gr-table td[data-neg]{color:var(--neg)}
 .gr-table-wrap{overflow-x:auto;margin-top:8px}.gr-table{border-collapse:collapse;font-size:12px}
 .gr-table th,.gr-table td{padding:5px 10px;border-bottom:1px solid var(--ui-stroke-secondary);text-align:left;white-space:nowrap}
 .gr-table th{font-weight:500;color:var(--ui-text-secondary)}.gr-num{text-align:right!important;font-variant-numeric:tabular-nums}
-.gr-sql-head{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:12px;color:var(--ui-text-secondary)}.gr-sql-head span{margin-right:auto}
 .gr-sql,.gr-explain{margin:6px 0 0;padding:10px 12px;border-radius:6px;background:var(--chrome-action-hover);font:12px/1.5 var(--font-mono,ui-monospace,monospace);white-space:pre-wrap;overflow-wrap:anywhere}
 @container (max-width:560px){.gr-split{flex-direction:column}.gr-list{width:auto;max-height:200px;border-right:0;border-bottom:1px solid var(--ui-stroke-secondary)}.gr-toggles{margin-left:0}}
 `

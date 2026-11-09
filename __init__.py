@@ -26,8 +26,8 @@ def register(ctx):
             handler=_HANDLERS[schema["name"]],
         )
 
-    ctx.register_command("grimoire", commands.run, description="Grimoire status, query SQL, skipped lines and merges",
-                         args_hint="[setup | sql q12 | report | learn on | merges]")
+    ctx.register_command("grimoire", commands.run, description="Data help. Try: learn on, setup, report, explain q1",
+                         args_hint="[learn on|off|plain|sql | setup | report | explain q1 | merges]")
 
     tools.configure(allow_private_folders=ctx.get_config("allow_private_folders", default=False))
 

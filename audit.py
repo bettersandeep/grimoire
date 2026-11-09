@@ -155,6 +155,10 @@ def pitfalls(q, eng):
         dup_r = _count(eng, f'SELECT count(*) - count(DISTINCT "{key_r}") FROM {right}')
         if dup_l and dup_r:
             out.append(f"the join on {key_l} matches several rows on both sides, so rows can be counted more than once")
+    variants = _result_variants(q)
+    if variants:
+        out.append(f"{variants} look like one value spelled differently; combine them with grimoire_merge "
+                   "so each total counts once")
     constants = _constants(outer_select)
     if constants:
         out.append(f"uses {', '.join(constants)}, written into the SQL, not taken from the data")
@@ -171,6 +175,22 @@ def pitfalls(q, eng):
                     out.append(warning)
             break
     return out
+
+
+def _result_variants(q):
+    """Labels in one result column that differ only in case, spaces or punctuation ('North', 'north ')."""
+    rows = q["rows"]
+    for i in range(len(q["columns"])):
+        labels = [r[i] for r in rows if isinstance(r[i], str)]
+        if len(labels) < 2 or len(labels) != len(rows):
+            continue
+        groups = {}
+        for v in labels:
+            groups.setdefault(re.sub(r"[^a-z0-9]", "", v.lower()), []).append(v)
+        same = [g for k, g in groups.items() if k and len(set(g)) > 1]
+        if same:
+            return " and ".join(" / ".join(repr(v) for v in dict.fromkeys(g)) for g in same[:2])
+    return None
 
 
 def _incomplete_period(q, eng, column, kind):
