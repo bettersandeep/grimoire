@@ -28,7 +28,7 @@ PROFILE = {
     "name": "grimoire_profile",
     "description": (
         "Profile a data table: column types, empty values, distinct counts, ranges. "
-        "Also data problems, column roles, correlations, join keys. Ask the user about problems."
+        "Also data problems and how columns relate. Ask the user about problems."
     ),
     "parameters": {
         "type": "object",
@@ -62,7 +62,7 @@ DRIVERS = {
     "name": "grimoire_drivers",
     "description": (
         "Explain what drives a change between two periods, split by category columns. "
-        "Returns the total change and the segments that moved most, as a citable query id."
+        "Returns the segments that moved most; citable query id."
     ),
     "parameters": {
         "type": "object",
@@ -76,6 +76,25 @@ DRIVERS = {
             "table": _TABLE,
         },
         "required": ["dataset", "time_column", "before", "after"],
+    },
+}
+
+COMPARE = {
+    "name": "grimoire_compare",
+    "description": (
+        "Test if two groups really differ (averages or rates); p-value, citable id."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "dataset": _DATASET,
+            "measure": {"type": "string", "description": "Number column, or a condition like x = 'y' for a rate."},
+            "group_column": {"type": "string"},
+            "a": {"type": "string"},
+            "b": {"type": "string"},
+            "table": _TABLE,
+        },
+        "required": ["dataset", "measure", "group_column", "a", "b"],
     },
 }
 
@@ -118,4 +137,4 @@ CATALOG = {
     "parameters": {"type": "object", "properties": {}},
 }
 
-ALL = [ATTACH, PROFILE, QUERY, DRIVERS, NOTE, MERGE, CATALOG]
+ALL = [ATTACH, PROFILE, QUERY, DRIVERS, COMPARE, NOTE, MERGE, CATALOG]

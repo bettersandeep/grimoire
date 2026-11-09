@@ -9,6 +9,7 @@ _HANDLERS = {
     "grimoire_profile": tools.profile,
     "grimoire_query": tools.query,
     "grimoire_drivers": tools.drivers,
+    "grimoire_compare": tools.compare,
     "grimoire_note": tools.note,
     "grimoire_merge": tools.merge,
     "grimoire_catalog": tools.catalog,

@@ -25,6 +25,7 @@ _DAY = re.compile(r"date_trunc\(\s*'(?:day|hour|week)'\s*,\s*\"?(\w+)\"?\s*\)|\b
                   r"|CAST\(\s*\"?(\w+)\"?\s+AS\s+DATE\s*\)|\"?(\w+)\"?::DATE|strftime\(\s*\"?(\w+)\"?\s*,\s*'[^']*%[dHa]", re.I)
 # A rate: divided by a count or sum (not by 100 for units), or named like one.
 _RATIO = re.compile(r"/\s*\(?\s*(?:nullif\s*\(\s*)?(?:count|sum)\s*\(|\b(?:pct|percent\w*|share|rate|ratio)\b", re.I)
+_IN = re.compile(r"^(?:CAST\(\s*)?\"?(\w+)\"?(?:\s+AS\s+VARCHAR\s*\))?\s+IN\s*\(((?:\s*'[^',]*'\s*,?)+)\)$", re.I)
 _NOT_NULL = re.compile(r'^\(?\s*"?(\w+)"?\s+IS\s+NOT\s+NULL\s*\)?$', re.I)
 
 
@@ -59,6 +60,9 @@ _count = _value
 
 def _plain(cond):
     """A WHERE condition in plain words, for the common shapes; else the condition itself, shortened."""
+    m = _IN.match(cond.strip())
+    if m:  # CAST(region AS VARCHAR) IN ('North', 'South'), as grimoire_compare writes it
+        return f"{m.group(1)} is " + " or ".join(v.strip().strip("'") for v in m.group(2).split(","))
     pieces = re.split(r"\s+AND\s+", cond.strip(), flags=re.I)
     empty = [m.group(1) for m in (_NOT_NULL.match(p) for p in pieces) if m]
     if empty and len(empty) == len(pieces):

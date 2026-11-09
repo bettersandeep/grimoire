@@ -421,6 +421,37 @@ def test_profile_checks(tmp, db):
     assert store.forget_dataset(db, "odd") and store.get_json(db, "health:odd", None) is None
 
 
+def test_compare(tmp, db):
+    tools.setup(db=db, eng=None)
+    st = pkg.stats
+    assert round(st.t_p_value(2.0, 10), 4) == 0.0734 and round(st.t_p_value(3.0, 5), 4) == 0.0301
+    assert round(st.z_p_value(1.96), 3) == 0.05 and st.welch(1, 5, 0, 9, 4, 1) is None
+    csv = tmp / "ab.csv"
+    rows = ["variant,amount,paid"]
+    rows += [f"A,{100 + i % 7},{str(i % 3 != 0).lower()}" for i in range(200)]
+    rows += [f"B,{110 + i % 7},{str(i % 2 == 0).lower()}" for i in range(200)]
+    rows += [f"C,{100 + i % 7},true" for i in range(5)]
+    csv.write_text("\n".join(rows) + "\n")
+    call(tools.attach, path=str(csv))
+    r = call(tools.compare, dataset="ab", measure="amount", group_column="variant", a="A", b="B")
+    assert r["test"] == "Welch's t-test" and r["rows"][0][3] == -10 and r["rows"][0][4] < 0.001, r
+    assert "p < 0.001" in r["verdict"] and "not a cause" in r["verdict"]
+    r = call(tools.compare, dataset="ab", measure="paid", group_column="variant", a="A", b="B")
+    assert r["test"] == "two-proportion z-test" and r["columns"][2] == "pct", r
+    assert abs(r["rows"][0][2] - 66.5) < 0.01 and r["rows"][1][2] == 50.0, r
+    r = call(tools.compare, dataset="ab", measure="amount > 103", group_column="variant", a="A", b="C")
+    assert "only 5 rows" in r["verdict"], r
+    assert pkg.audit._plain("CAST(\"variant\" AS VARCHAR) IN ('A', 'C')") == "variant is A or C"
+    assert pkg.audit._plain("region IN ('North')") == "region is North"
+    q = store.get_query(db, r["id"])
+    assert q["columns"] == ["group", "rows", "pct", "difference", "p_value"] and q["datasets"] == ["ab"]
+    assert "No rows where variant is 'Z'" in call(tools.compare, dataset="ab", measure="amount", group_column="variant", a="A", b="Z")["error"]
+    # the measure goes into SQL: still one read-only SELECT
+    bad = call(tools.compare, dataset="ab", measure="1); DROP TABLE ab; --", group_column="variant", a="A", b="B")
+    assert "error" in bad, bad
+    assert "grimoire_compare" in " ".join(pkg.recipes.for_message("Is the difference statistically significant?"))
+
+
 def test_charts():
     report = pkg.report
     days = ["Sunday", "Monday", "Tuesday"]
@@ -467,7 +498,7 @@ def test_recipes(tmp, db):
     assert recipes.for_message("What is the total revenue?") == []
     assert "lag(total)" in recipes.for_message("Show month over month growth")[0]
     assert "datediff('month'" in " ".join(recipes.for_message("What is the 3-month retention by cohort?"))
-    assert "% of" in recipes.RECIPES[0][0] and recipes.for_message("What % of orders are North?")
+    assert any("% of" in r[0] for r in recipes.RECIPES) and recipes.for_message("What % of orders are North?")
     assert len(recipes.for_message("median and share and growth and outliers")) == recipes.MAX_RECIPES
     ctx = FakeCtx()
     pkg.register(ctx)
@@ -671,6 +702,7 @@ def main():
     test_lean_setup(tmp, db)
     test_recipes(tmp, db)
     test_charts()
+    test_compare(tmp, db)
     print("selftest passed")
 
 

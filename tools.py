@@ -13,6 +13,7 @@ from . import guard
 from . import learning
 from . import metrics
 from . import relations
+from . import stats
 from . import store
 from . import verify
 
@@ -467,6 +468,60 @@ def drivers(args, session_id=None, **kwargs):
         return _err(str(exc))
     except Exception as exc:
         return _err(f"drivers failed: {exc}")
+
+
+def compare(args, session_id=None, **kwargs):
+    try:
+        db, eng = _get()
+        _sync(db, eng)
+        dataset = args.get("dataset", "")
+        ref = _resolve_table(eng, dataset, args.get("table"))
+        table = _sql_ref(ref)
+        types = dict(eng.schema(table))
+        group = args.get("group_column", "")
+        if group not in types:
+            return _err(f"No column '{group}' in {ref}. Columns: {', '.join(types)}")
+        a, b = str(args.get("a", "")), str(args.get("b", ""))
+        raw = (args.get("measure") or "").strip()
+        measure, _used = metrics.expand(engine.ident(raw) if raw in types else raw, store.metrics(db))
+        if not measure:
+            return _err("Pass measure: a numeric column, or a condition like status = 'paid'.")
+        g = f"CAST({engine.ident(group)} AS VARCHAR)"
+        kind = eng.query(f"SELECT typeof({measure}) FROM {table} LIMIT 1")[1]
+        rate = bool(kind) and kind[0][0] == "BOOLEAN"
+        stat = (f"count_if({measure}) AS hits, round(avg(CAST({measure} AS INTEGER)) * 100, 4) AS pct" if rate else
+                f"round(avg({measure}), 4) AS mean, round(stddev_samp({measure}), 4) AS sd")
+        sql = (f"SELECT {g} AS grp, count({measure}) AS n, {stat} FROM {table} "
+               f"WHERE {g} IN ({engine.literal(a)}, {engine.literal(b)}) GROUP BY 1")
+        columns, rows, _ = eng.query(sql, engine.SETUP_TIMEOUT_S)
+        found = {r[0]: r for r in rows}
+        missing = [v for v in (a, b) if v not in found]
+        if missing:
+            return _err(f"No rows where {group} is {', '.join(repr(v) for v in missing)}. Check the exact values.")
+        (_, n1, x1, y1), (_, n2, x2, y2) = found[a], found[b]
+        if rate:
+            test, label = stats.proportions(x1, n1, x2, n2), "pct"
+            p_value, diff = (test[1] if test else None), round(y1 - y2, 4)
+        else:
+            test, label = stats.welch(n1, float(x1 or 0), y1, n2, float(x2 or 0), y2), "mean"
+            p_value, diff = (test[2] if test else None), round(float(x1 or 0) - float(x2 or 0), 4)
+        out_cols = ["group", "rows", label, "difference", "p_value"]
+        out_rows = [[a, n1, y1 if rate else x1, diff, None if p_value is None else round(p_value, 6)],
+                    [b, n2, y2 if rate else x2, None, None]]
+        with _lock:
+            question = _messages.get(session_id or "")
+        purpose = args.get("purpose") or f"Is the {label} of {raw} different for {group} {a} and {b}?"
+        qid = store.save_query(db, session_id, sql, purpose, out_cols, out_rows, False, datasets=[dataset], question=question)
+        remember(session_id, out_rows)
+        with _lock:
+            _put(_last_qid, session_id, qid)
+        method = ("two-proportion z-test" if rate else "Welch's t-test")
+        return _ok(id=qid, columns=out_cols, rows=out_rows, test=method,
+                   verdict=stats.verdict(p_value, n1, n2), note=UNTRUSTED, cite=f"Cite numbers from this result as [{qid}].")
+    except engine.EngineError as exc:
+        return _err(str(exc))
+    except Exception as exc:
+        return _err(f"compare failed: {exc}")
 
 
 def merge(args, **kwargs):

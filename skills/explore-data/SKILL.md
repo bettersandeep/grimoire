@@ -43,6 +43,11 @@ If the context or `grimoire_catalog` lists saved metrics, use them by name in SQ
 Grimoire replaces the name with the saved definition, so every answer computes it the same way.
 If the user keeps asking for the same calculation, suggest saving it: `/grimoire define <name> = <expression>`.
 
+## Is a difference real?
+
+For "is A really different from B, or chance?", call `grimoire_compare` with a number column (averages) or a condition (rates).
+State the p-value in its plain words and keep its cautions: small groups, size of the difference, and that it does not show a cause.
+
 ## DuckDB recipes
 
 - Share of total: `round(100 * sum(x) / sum(sum(x)) OVER (), 1) AS pct` with `GROUP BY`.

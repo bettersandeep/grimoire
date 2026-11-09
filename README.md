@@ -70,6 +70,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Shape of the data | Which columns are dimensions, metrics and time; metrics that move together; ID columns that join to other attached files, with the share that matches |
 | Explains changes | "Why did revenue drop in March?": the total change split by each category column, with each segment's share |
+| Tests differences | "Is North really different from South, or chance?": Welch's t-test for averages, a two-proportion z-test for rates, with an exact p-value and plain words; it warns about small groups and that a difference is not a cause |
 | Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL, with a file filter and search, tables that sort by any column, caveats under each result, and an "About the data" part (health, data problems, column notes, saved metrics). The chart fits the result: line for time, heatmap for two labels and a number (weekday by hour), histogram for equal buckets, scatter for two numbers, bars otherwise |
 | Remembers | Files, column notes and merge rules across sessions |
 | Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
@@ -107,7 +108,7 @@ Like every Desktop plugin it starts off; turn it on under **Capabilities → Plu
 
 ## Tools the model gets
 
-`grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_drivers`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.
+`grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_drivers`, `grimoire_compare`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.
 
 ## Benchmark
 
