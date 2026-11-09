@@ -48,7 +48,8 @@ export const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 export function fmt(v) {
   if (v === null || v === undefined) return ''
   if (isNum(v)) return Number.isInteger(v) ? v.toLocaleString('en-US') : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  return String(v)
+  const t = String(v)
+  return /^\d{4}-\d{2}-\d{2}[T ]00:00:00$/.test(t) ? t.slice(0, 10) : t  // a date stored as a timestamp
 }
 
 /** [label index, value index] for a bar chart, or null (same rule as the chat chart). */
@@ -172,6 +173,16 @@ export function compact(v) {
   return `${Number(v.toPrecision(3))}`
 }
 
+/** Axis labels to draw: evenly spaced so they never touch, always the last one (same rule as report.ticks). */
+export function ticks(n, width, labelPx) {
+  if (n <= 1) return [...Array(n).keys()]
+  const step = width / (n - 1)
+  const every = Math.max(1, Math.ceil(Math.floor(labelPx * 1.6) / Math.max(1, Math.floor(step))))
+  const keep = []
+  for (let i = 0; i < n - 1; i += every) if ((n - 1 - i) * step >= labelPx * 1.6) keep.push(i)
+  return [...keep, n - 1]
+}
+
 function Line({ q, li, vi }) {
   const rows = q.rows.filter((r) => isNum(r[vi]) && r[li] !== null).sort((a, b) => String(a[li]).localeCompare(String(b[li]))).slice(0, 120)
   const vals = rows.map((r) => r[vi])
@@ -180,7 +191,6 @@ function Line({ q, li, vi }) {
   const W = 560, H = 190, B = 22, L = 14 + 7 * Math.max(...marks.map((v) => compact(v).length))
   const x = (i) => L + (W - L - 10) * (i / Math.max(1, rows.length - 1))
   const y = (v) => 8 + (H - B - 8) * (1 - (v - lo) / (hi - lo || 1))
-  const every = Math.max(1, Math.floor(rows.length / 6))
   return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${q.columns[vi]} over ${q.columns[li]}`, children: [
     ...marks.map((v, i) => jsxs('g', { children: [
       jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
@@ -188,11 +198,8 @@ function Line({ q, li, vi }) {
     ] }, 'g' + i)),
     jsx('polyline', { points: vals.map((v, i) => `${x(i)},${y(v)}`).join(' '), className: 'gr-path-line' }, 'p'),
     ...rows.map((r, i) => jsx('circle', { cx: x(i), cy: y(r[vi]), r: 2.5, className: 'gr-dot', children: jsx('title', { children: `${r[li]}: ${fmt(r[vi])}` }) }, 'd' + i)),
-    ...rows.map((r, i) => {
-      const last = i === rows.length - 1
-      if (!last && (i % every !== 0 || rows.length - 1 - i < every / 2)) return null
-      return jsx('text', { x: x(i), y: H - 5, textAnchor: i === 0 ? 'start' : last ? 'end' : 'middle', className: 'gr-tick', children: String(r[li]).slice(0, 10) }, 't' + i)
-    })
+    ...ticks(rows.length, W - L - 10, 7 * Math.max(...rows.map((r) => String(r[li]).slice(0, 10).length))).map((i) =>
+      jsx('text', { x: x(i), y: H - 5, textAnchor: i === 0 ? 'start' : i === rows.length - 1 ? 'end' : 'middle', className: 'gr-tick', children: String(rows[i][li]).slice(0, 10) }, 't' + i))
   ] })
 }
 

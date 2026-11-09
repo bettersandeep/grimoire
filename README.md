@@ -70,7 +70,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Shape of the data | Which columns are dimensions, metrics and time; metrics that move together; ID columns that join to other attached files, with the share that matches |
 | Explains changes | "Why did revenue drop in March?": the total change split by each category column, with each segment's share |
-| Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL. The chart fits the result: line for time, heatmap for two labels and a number (weekday by hour), histogram for equal buckets, scatter for two numbers, bars otherwise |
+| Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL, with a file filter and search, tables that sort by any column, caveats under each result, and an "About the data" part (health, data problems, column notes, saved metrics). The chart fits the result: line for time, heatmap for two labels and a number (weekday by hour), histogram for equal buckets, scatter for two numbers, bars otherwise |
 | Remembers | Files, column notes and merge rules across sessions |
 | Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
 | Teaches (opt-in) | A short SQL lesson and a better question after answers; optional "guess first" predictions |

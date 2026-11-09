@@ -441,6 +441,12 @@ def test_charts():
     assert "<script>" not in report.chart_svg(evil) and "&lt;script&gt;" in report.chart_svg(evil)
     assert report.chart_svg({"id": "q3", "columns": ["a", "b"], "rows": [[0, 1], [1, 2], [2, 3]]}).count('class="bar"') == 3
     assert report._short(91000000.0) == "91M" and report._short(950.5) == "950.50"
+    # axis labels never touch, and the last one is always drawn
+    for n in (2, 6, 13, 30, 120):
+        shown = report.ticks(n, 500, 70)
+        step = 500 / (n - 1)
+        assert shown[-1] == n - 1 and all((b - a) * step >= 70 * 1.5 for a, b in zip(shown, shown[1:])), (n, shown)
+    assert report._fmt("2024-06-01T00:00:00") == "2024-06-01" and report._fmt("2024-06-01T10:30:00") == "2024-06-01T10:30:00"
 
 
 class FakeCtx:
