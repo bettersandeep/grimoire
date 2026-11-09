@@ -391,6 +391,44 @@ def test_profile_checks(tmp, db):
     assert store.forget_dataset(db, "odd") and store.get_json(db, "health:odd", None) is None
 
 
+class FakeCtx:
+    """Just enough of the Hermes plugin context to run register() and call the hooks."""
+    def __init__(self):
+        self.hooks, self.tools, self.commands = {}, [], {}
+    def register_tool(self, name, **kw): self.tools.append(name)
+    def register_hook(self, name, fn, **kw): self.hooks[name] = fn
+    def register_command(self, name, fn, **kw): self.commands[name] = fn
+    def register_skill(self, *a, **kw): pass
+    def get_config(self, key, default=None): return default
+    def session_cwd(self): return None
+
+
+def test_recipes(tmp, db):
+    tools.setup(db=db, eng=None)
+    recipes = pkg.recipes
+    assert recipes.for_message("What is the total revenue?") == []
+    assert "lag(total)" in recipes.for_message("Show month over month growth")[0]
+    assert "datediff('month'" in " ".join(recipes.for_message("What is the 3-month retention by cohort?"))
+    assert "% of" in recipes.RECIPES[0][0] and recipes.for_message("What % of orders are North?")
+    assert len(recipes.for_message("median and share and growth and outliers")) == recipes.MAX_RECIPES
+    ctx = FakeCtx()
+    pkg.register(ctx)
+    assert set(ctx.tools) == {s_["name"] for s_ in schemas.ALL} and "grimoire" in ctx.commands
+    turn = ctx.hooks["pre_llm_call"]
+    # a chat that never used Grimoire gets nothing, even for a recipe word
+    assert turn(user_message="What is the median salary in my head?", session_id="norecipe") is None
+    csv = tmp / "rec.csv"
+    csv.write_text("customer_id,d,amount\n1,2026-01-03,10\n2,2026-02-04,20\n")
+    out = turn(user_message=f"What is the monthly retention by cohort in {csv}?", session_id="rec")["context"]
+    assert "Data files are attached" in out and "Cohort retention" in out, out
+    plain = turn(user_message="And the total amount?", session_id="rec")
+    assert plain is None or "recipe" not in plain["context"], plain
+    # hooks keep only numbers from Hermes's API hooks
+    ctx.hooks["pre_api_request"](session_id="rec", tool_count=8, request_messages=["secret"])
+    ctx.hooks["post_api_request"](session_id="rec", usage={"prompt_tokens": 2200}, response="secret")
+    assert tools.call_size("rec") == (8, 2200)
+
+
 def test_lean_setup(tmp, db):
     tools.setup(db=db, eng=None)
     csv = tmp / "lean.csv"
@@ -572,6 +610,7 @@ def main():
     test_relations(tmp, db)
     test_profile_checks(tmp, db)
     test_lean_setup(tmp, db)
+    test_recipes(tmp, db)
     print("selftest passed")
 
 

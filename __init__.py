@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from . import commands, guard, learning, schemas, tools
+from . import commands, guard, learning, recipes, schemas, tools
 
 _HANDLERS = {
     "grimoire_attach": tools.attach,
@@ -55,6 +55,9 @@ def register(ctx):
             hint = guard.data_file_hint(user_message)
         parts = [hint] if hint else []
         if hint or tools.used_grimoire(session_id):
+            found = recipes.for_message(user_message)
+            if found:  # only when the question calls for one; nothing otherwise
+                parts.append("[Grimoire] DuckDB recipe" + ("s" if len(found) > 1 else "") + ": " + " ".join(found))
             try:
                 if tools.learning_state()[1]:
                     parts.append(learning.PREDICT_CONTEXT)
