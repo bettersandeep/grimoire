@@ -27,15 +27,18 @@ def kind(typ):
 
 def build(table_sql, types, spec):
     """(sql, purpose) for spec {group, bucket, measure, column, filter: {column, op, value}}; types: {column: type}."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("filter") or {}, dict):
+        raise BuildError("Send the chart choices as an object.")
+
     def column(name, want=None):
-        if name not in types:
+        if not isinstance(name, str) or name not in types:
             raise BuildError(f"No column '{name}'.")
         if want and kind(types[name]) != want:
             raise BuildError(f"'{name}' is not a {want} column.")
         return ident(name)
 
     measure = spec.get("measure") or "count"
-    if measure not in MEASURES:
+    if not isinstance(measure, str) or measure not in MEASURES:
         raise BuildError(f"Unknown measure '{measure}'.")
     if measure == "count":
         expr, label = MEASURES["count"], "rows"
@@ -50,7 +53,7 @@ def build(table_sql, types, spec):
         g = column(group)
         bucket = spec.get("bucket")
         if bucket:
-            if bucket not in BUCKETS or kind(types[group]) != "time":
+            if not isinstance(bucket, str) or bucket not in BUCKETS or kind(types[group]) != "time":
                 raise BuildError(f"Cannot group '{group}' by {bucket}.")
             select.append(f"strftime({g}, '{BUCKETS[bucket]}') AS {ident(bucket)}")
             tail, by = " GROUP BY 1 ORDER BY 1", f" per {bucket}"
@@ -71,7 +74,7 @@ def build(table_sql, types, spec):
     f = spec.get("filter") or {}
     if f.get("column"):
         op = f.get("op") or "="
-        if op not in OPS:
+        if not isinstance(op, str) or op not in OPS:
             raise BuildError(f"Unknown filter '{op}'.")
         value = str(f.get("value", ""))
         if not value:
