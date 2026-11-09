@@ -249,6 +249,40 @@ def test_data_plugin(tmp, db):
     assert "error" in call(tools.query, sql="SELECT * FROM regions")
 
 
+def test_audit(tmp, db):
+    tools.setup(db=db, eng=None)
+    (tmp / "orders.csv").write_text(
+        "id,customer_id,day,amount\n1,10,2026-01-05,100\n2,10,2026-01-20,\n3,11,2026-02-03,50\n4,12,2026-02-10,70\n")
+    (tmp / "visits.csv").write_text("customer_id,channel\n10,web\n10,app\n11,web\n")
+    call(tools.attach, path=str(tmp / "orders.csv"))
+    call(tools.attach, path=str(tmp / "visits.csv"))
+    run = lambda sql: call(tools.query, sql=sql)
+    eng = tools._get()[1]
+    # assumptions: what a filter left out, top-N, plain words for IS NOT NULL
+    q = store.get_query(db, run("SELECT sum(amount) AS total FROM orders WHERE amount IS NOT NULL")["id"])
+    assert pkg.audit.assumptions(q, eng) == ["left out 1 of 4 rows (empty amount)"], pkg.audit.assumptions(q, eng)
+    q = store.get_query(db, run("SELECT id, amount FROM orders ORDER BY amount DESC LIMIT 2")["id"])
+    assert pkg.audit.assumptions(q, eng) == ["shows the top 2 only"]
+    # pitfalls: incomplete last month, average of averages, a join that repeats rows on both sides
+    q = store.get_query(db, run("SELECT strftime(day, '%Y-%m') AS m, sum(amount) AS t FROM orders GROUP BY 1 ORDER BY 1")["id"])
+    assert any("the last month (2026-02) has data only up to 2026-02-10" in w for w in pkg.audit.pitfalls(q, eng))
+    q = store.get_query(db, run("SELECT avg(a) FROM (SELECT customer_id, avg(amount) AS a FROM orders GROUP BY 1)")["id"])
+    assert any(w.startswith("average of averages") for w in pkg.audit.pitfalls(q, eng))
+    q = store.get_query(db, run("SELECT sum(o.amount) FROM orders o JOIN visits v USING (customer_id)")["id"])
+    assert any("join on customer_id matches several rows on both sides" in w for w in pkg.audit.pitfalls(q, eng))
+    q = store.get_query(db, run("SELECT count(*) FROM orders")["id"])
+    assert pkg.audit.pitfalls(q, eng) == [] and pkg.audit.assumptions(q, eng) == []
+    # the footer: verdict follows the number check and the warnings
+    qid = run("SELECT sum(amount) AS total FROM orders WHERE amount IS NOT NULL")["id"]
+    out = tools.check_reply(f"Total is 220 [{qid}].", "test")
+    assert "Verdict: ready to share." in out and "Assumes: left out 1 of 4 rows (empty amount)" in out, out
+    out = tools.check_reply(f"Total is 999 [{qid}].", "test")
+    assert "Verdict: needs revision." in out, out
+    mid = run("SELECT strftime(day, '%Y-%m') AS m, sum(amount) AS t FROM orders GROUP BY 1 ORDER BY 1")["id"]
+    out = tools.check_reply(f"February brought 120 [{mid}].", "test")
+    assert "Verdict: share with caveats." in out and "Watch out:" in out, out
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -381,7 +415,8 @@ def main():
     tools.remember_user_message("test", "show the top 2 regions")
     note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
     assert "2 of 3" in note and "999" in note and "No source" in note, note
-    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith("the number traces to query results.")
+    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith(
+        "the number traces to query results. Verdict: ready to share.")
     assert tools.check_reply("no numbers here", "test") == ""
     assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
 
@@ -390,6 +425,7 @@ def main():
     test_learning(tmp, db)
     test_auto_attach(tmp, db)
     test_data_plugin(tmp, db)
+    test_audit(tmp, db)
     print("selftest passed")
 
 
