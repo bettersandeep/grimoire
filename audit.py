@@ -178,18 +178,20 @@ def pitfalls(q, eng):
 
 
 def _result_variants(q):
-    """Labels in one result column that differ only in case, spaces or punctuation ('North', 'north ')."""
-    rows = q["rows"]
-    for i in range(len(q["columns"])):
+    """Labels in one result column that look like one value written differently (see engine.variant_groups).
+    The result's last number column stands in for each label's size, so a rare variant stands out."""
+    rows, cols = q["rows"], q["columns"]
+    nums = [i for i in range(len(cols)) if rows and all(isinstance(r[i], (int, float)) and not isinstance(r[i], bool) for r in rows)]
+    for i in range(len(cols)):
         labels = [r[i] for r in rows if isinstance(r[i], str)]
-        if len(labels) < 2 or len(labels) != len(rows):
+        if len(set(labels)) < 2 or len(labels) != len(rows):
             continue
-        groups = {}
-        for v in labels:
-            groups.setdefault(re.sub(r"[^a-z0-9]", "", v.lower()), []).append(v)
-        same = [g for k, g in groups.items() if k and len(set(g)) > 1]
-        if same:
-            return " and ".join(" / ".join(repr(v) for v in dict.fromkeys(g)) for g in same[:2])
+        size = {}
+        for r in rows:  # a label can repeat (region by month): add up its rows
+            size[r[i]] = size.get(r[i], 0) + (abs(r[nums[-1]]) if nums else 1)
+        groups = engine.variant_groups(size)
+        if groups:
+            return " and ".join(" / ".join(repr(v) for v in g) for g in groups[:2])
     return None
 
 

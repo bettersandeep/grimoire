@@ -176,7 +176,7 @@ function issueText(i) {
   return `${i.column}: ${i.issue}`
 }
 
-const LEVELS = [[90, 'good', 'Good: no serious problems.'], [70, 'fair', 'Check the problems below before you share numbers from this file.'],
+const LEVELS = [[90, 'good', 'Only small problems: read them below before you share.'], [70, 'fair', 'Check the problems below before you share numbers from this file.'],
   [-Infinity, 'poor', 'Fix or explain the problems below before you use numbers from this file.']]
 export const healthLevel = (score) => LEVELS.find(([min]) => score >= min)
 
@@ -192,7 +192,7 @@ function HealthChip({ d, open, toggle, checking }) {
 }
 
 function HealthInfo({ health }) {
-  const [, , advice] = healthLevel(health.score)
+  const advice = health.off.length ? healthLevel(health.score)[2] : ''
   return jsxs('div', { className: 'gr-health-info', children: [
     jsxs('p', { children: [jsx('b', { children: `Data health ${health.score} of 100` }), ' shows how far you can trust the numbers in this file. 100 means Grimoire found no problems. ', advice] }),
     health.off.length ? jsx('ul', { children: health.off.map((o) => {
@@ -296,11 +296,11 @@ function Line({ q, li, vi, area }) {
 }
 
 /** Horizontal bars: the default for categories. */
-function Bars({ q, li, vi }) {
+function Bars({ q, li, vi, onPick }) {
   const [tip, bind] = useTip()
   const rows = q.rows.filter((r) => isNum(r[vi])).slice(0, 25)
   const top = Math.max(...rows.map((r) => Math.abs(r[vi]))) || 1
-  return chart(tip, jsx('div', { className: 'gr-bars', role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: rows.map((r, i) => jsxs('div', { className: 'gr-bar-row', ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`), children: [
+  return chart(tip, jsx('div', { className: 'gr-bars', role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: rows.map((r, i) => jsxs('div', { className: 'gr-bar-row', 'data-pick': onPick ? true : undefined, onClick: onPick ? () => onPick(r[li]) : undefined, ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`), children: [
     jsx('span', { className: 'gr-bar-label', children: fmt(r[li]) }),
     jsx('span', { className: 'gr-bar-track', children: jsx('span', { className: 'gr-bar', 'data-neg': r[vi] < 0 || undefined, style: { width: `${(Math.abs(r[vi]) / top) * 100}%` } }) }),
     jsx('span', { className: 'gr-bar-value', children: Math.abs(r[vi]) >= 10000 ? compact(r[vi]) : fmt(r[vi]) })
@@ -308,7 +308,7 @@ function Bars({ q, li, vi }) {
 }
 
 /** Vertical columns. */
-function Columns({ q, li, vi }) {
+function Columns({ q, li, vi, onPick }) {
   const [tip, bind] = useTip()
   const rows = q.rows.filter((r) => isNum(r[vi])).slice(0, 60)
   const vals = rows.map((r) => r[vi]), lo = Math.min(0, ...vals), hi = Math.max(0, ...vals) || 1
@@ -319,13 +319,14 @@ function Columns({ q, li, vi }) {
   return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: [
     ...axis(lo, hi, L, W, y),
     ...rows.map((r, i) => jsx('rect', { x: L + bw * i + 1, y: Math.min(y(r[vi]), y(0)), width: Math.max(1, bw - 2), height: Math.abs(y(0) - y(r[vi])), rx: 3,
-      className: r[vi] < 0 ? 'gr-col gr-neg' : 'gr-col', ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`) }, 'c' + i)),
+      className: r[vi] < 0 ? 'gr-col gr-neg' : 'gr-col', 'data-pick': onPick ? true : undefined, onClick: onPick ? () => onPick(r[li]) : undefined,
+      ...bind(`${fmt(r[li])}: ${fmt(r[vi])}`) }, 'c' + i)),
     ...shown.map((i) => jsx('text', { x: L + bw * i + bw / 2, y: H - 5, textAnchor: 'middle', className: 'gr-tick', children: labels[i] }, 't' + i))
   ] }))
 }
 
 /** Parts of a whole: a donut with a legend, for up to 6 positive values. */
-function Donut({ q, li, vi }) {
+function Donut({ q, li, vi, onPick }) {
   const [tip, bind] = useTip()
   const rows = q.rows.filter((r) => isNum(r[vi]) && r[vi] > 0)
   const total = rows.reduce((a, r) => a + r[vi], 0) || 1
@@ -337,7 +338,7 @@ function Donut({ q, li, vi }) {
     const big = a1 - a0 > Math.PI ? 1 : 0, p = (a, rad) => `${C + rad * Math.cos(a)},${C + rad * Math.sin(a)}`
     const d = rows.length === 1 ? `M${C - R},${C}a${R},${R} 0 1,0 ${2 * R},0a${R},${R} 0 1,0 ${-2 * R},0M${C - r0},${C}a${r0},${r0} 0 1,1 ${2 * r0},0a${r0},${r0} 0 1,1 ${-2 * r0},0`
       : `M${p(a0, R)}A${R},${R} 0 ${big},1 ${p(a1, R)}L${p(a1, r0)}A${r0},${r0} 0 ${big},0 ${p(a0, r0)}Z`
-    return jsx('path', { d, className: `gr-slice gr-s${i + 1}`, ...bind(`${fmt(r[li])}: ${fmt(r[vi])} (${((100 * r[vi]) / total).toFixed(1)}%)`) }, i)
+    return jsx('path', { d, className: `gr-slice gr-s${i + 1}`, 'data-pick': onPick ? true : undefined, onClick: onPick ? () => onPick(r[li]) : undefined, ...bind(`${fmt(r[li])}: ${fmt(r[vi])} (${((100 * r[vi]) / total).toFixed(1)}%)`) }, i)
   })
   return chart(tip, jsxs('div', { className: 'gr-donut', children: [
     jsxs('svg', { viewBox: '0 0 200 200', role: 'img', 'aria-label': `Share of ${q.columns[vi]} by ${q.columns[li]}`, children: [
@@ -358,10 +359,11 @@ function Heatmap({ c }) {
   const vals = c.cells.map((t) => t[2]), lo = Math.min(...vals), hi = Math.max(...vals)
   const W = 560, CH = 20, TOP = 20, L = 12 + 7 * Math.max(...c.ys.map((v) => v.slice(0, 14).length))
   const cw = (W - L - 4) / c.xs.length, H = TOP + CH * c.ys.length
-  const every = Math.max(1, Math.ceil((7 * Math.max(...c.xs.map((v) => v.slice(0, 8).length))) / Math.max(1, cw - 4)))
+  const cut = (v) => (v.length > 12 ? v.slice(0, 11) + '…' : v)
+  const every = Math.max(1, Math.ceil((7 * Math.max(...c.xs.map((v) => cut(v).length))) / Math.max(1, cw - 4)))
   const step = (v) => Math.min(6, Math.floor((7 * (v - lo)) / (hi - lo || 1)))
   return chart(tip, jsxs('svg', { viewBox: `0 0 ${W} ${H + 24}`, role: 'img', 'aria-label': `${c.value} by ${c.x} and ${c.y}`, children: [
-    ...c.xs.map((v, i) => (i % every === 0 ? jsx('text', { x: L + cw * i + cw / 2, y: 13, textAnchor: 'middle', className: 'gr-tick', children: v.slice(0, 8) }, 'x' + i) : null)),
+    ...c.xs.map((v, i) => (i % every === 0 ? jsx('text', { x: L + cw * i + cw / 2, y: 13, textAnchor: 'middle', className: 'gr-tick', children: cut(v) }, 'x' + i) : null)),
     ...c.ys.map((v, j) => jsx('text', { x: L - 6, y: TOP + CH * j + 14, textAnchor: 'end', className: 'gr-tick', children: v.slice(0, 14) }, 'y' + j)),
     ...c.cells.map(([i, j, v], n) => jsx('rect', { x: L + cw * i + 1, y: TOP + CH * j + 1, width: Math.max(1, cw - 2), height: CH - 2, rx: 2,
       className: `gr-heat gr-h${step(v)}`, ...bind(`${c.xs[i]}, ${c.ys[j]}: ${fmt(v)}`) }, 'c' + n)),
@@ -420,20 +422,78 @@ function Picker({ label, options, value, onChange }) {
   ] })
 }
 
-function ChartView({ q }) {
+/** The latest value of a time series and its change from the period before, or null. */
+export function trend(q, li, vi) {
+  const rows = q.rows.filter((r) => isNum(r[vi]) && r[li] !== null).sort((a, b) => String(a[li]).localeCompare(String(b[li])))
+  if (rows.length < 2 || !isTime(rows.map((r) => r[li]))) return null
+  const [prev, last] = rows.slice(-2)
+  const pct = prev[vi] ? ((last[vi] - prev[vi]) / Math.abs(prev[vi])) * 100 : null
+  return { label: fmt(last[li]), value: last[vi], prev: fmt(prev[li]), pct }
+}
+
+function Trend({ t, name }) {
+  const up = t.pct >= 0
+  return jsxs('div', { className: 'gr-trend', children: [
+    jsx('span', { className: 'gr-muted', children: `${name}, latest (${t.label})` }),
+    jsx('b', { children: fmt(t.value) }),
+    t.pct === null ? null : jsx('span', { className: 'gr-delta',
+      children: `${up ? '▲' : '▼'} ${Math.abs(t.pct).toFixed(1)}% from ${t.prev}` })
+  ] })
+}
+
+function ChartView({ q, onDrill }) {
   const pick = chartColumns(q.columns, q.rows)
   const [kind, setKind] = useState(null)
   const [measure, setMeasure] = useState(null)
+  const source = q.datasets.length === 1 ? q.datasets[0] : null
+  const meta = useData(source && onDrill ? `/datasets/${source}/columns` : null, false)
   if (CHARTS[q.chart?.kind]) return jsx(CHARTS[q.chart.kind], { c: q.chart })
   if (!pick) return null
   const li = pick[0], all = measures(q, li), vi = all.includes(measure) ? measure : pick[1]
   const kinds = chartKinds(q, li, vi), k = kinds.includes(kind) ? kind : kinds[0]
+  const t = trend(q, li, vi)
+  // Look inside one bar: only when the label is a real column of the file (an alias or a computed label is not).
+  const known = (meta.data?.tables || []).some((tb) => tb.columns.some((c) => c.name === q.columns[li] && c.kind !== 'time'))
+  const onPick = known && !t ? (value) => onDrill({ dataset: source, fcol: q.columns[li], value: String(value) }) : null
   return jsxs('div', { children: [
+    t ? jsx(Trend, { t, name: q.columns[vi] }) : null,
     jsxs('div', { className: 'gr-pickers', children: [
       jsx(Picker, { label: 'Chart', options: kinds.map((v) => [v, KINDS[v][0]]), value: k, onChange: setKind }),
       all.length > 1 ? jsx(Picker, { label: 'Show', options: all.map((i) => [i, q.columns[i]]), value: vi, onChange: setMeasure }) : null
     ] }),
-    jsx(KINDS[k][1], { q, li, vi })
+    jsx(KINDS[k][1], { q, li, vi, onPick }),
+    onPick && k !== 'line' ? jsx('p', { className: 'gr-muted', children: `Click a ${k === 'donut' ? 'slice' : k === 'columns' ? 'column' : 'bar'} to look inside it: a new chart with only those rows.` }) : null
+  ] })
+}
+
+/** [row label, column label, number] indexes for a pivot table, or null: two labels and one number, few columns. */
+export function pivotColumns(q) {
+  if (q.columns.length !== 3 || q.rows.length < 2) return null
+  const nums = [0, 1, 2].filter((i) => q.rows.every((r) => isNum(r[i]) || r[i] === null))
+  if (nums.length !== 1) return null
+  const [a, b] = [0, 1, 2].filter((i) => i !== nums[0])
+  const across = new Set(q.rows.map((r) => r[b]))
+  return across.size >= 2 && across.size <= 24 ? [a, b, nums[0]] : null
+}
+
+function Pivot({ q }) {
+  const [a, b, v] = pivotColumns(q)
+  const rowKeys = [...new Set(q.rows.map((r) => r[a]))], colKeys = [...new Set(q.rows.map((r) => r[b]))]
+  const cell = new Map(q.rows.map((r) => [`${r[a]}\u0000${r[b]}`, r[v]]))
+  const top = Math.max(...q.rows.map((r) => Math.abs(r[v] || 0))) || 1
+  const dec = decimals(q.rows, v)
+  return jsxs('div', { children: [
+    jsx('div', { className: 'gr-table-wrap', children: jsxs('table', { className: 'gr-table gr-pivot', children: [
+      jsx('thead', { children: jsxs('tr', { children: [jsx('th', { children: `${q.columns[a]} \\ ${q.columns[b]}` }),
+        ...colKeys.map((c) => jsx('th', { className: 'gr-num', children: fmt(c) }, String(c)))] }) }),
+      jsx('tbody', { children: rowKeys.map((rk) => jsxs('tr', { children: [jsx('th', { children: fmt(rk) }), ...colKeys.map((ck) => {
+        const x = cell.get(`${rk}\u0000${ck}`)
+        return jsx('td', { className: 'gr-num', 'data-neg': x < 0 || undefined,
+          style: isNum(x) ? { '--heat': `${Math.round(6 + (44 * Math.abs(x)) / top)}%` } : undefined,
+          children: isNum(x) ? x.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }) : '' }, String(ck))
+      })] }, String(rk))) })
+    ] }) }),
+    jsx('p', { className: 'gr-muted', children: `${q.columns[v]} for each ${q.columns[a]} and ${q.columns[b]}; a stronger color is a larger number.` })
   ] })
 }
 
@@ -478,8 +538,8 @@ function Explain({ id }) {
   return jsx('pre', { className: 'gr-explain', children: data.data.text })
 }
 
-function Detail({ q }) {
-  const tabs = [...(isKpi(q) ? [['result', 'Result']] : hasChart(q) ? [['chart', 'Chart']] : []),
+function Detail({ q, onDrill }) {
+  const tabs = [...(isKpi(q) ? [['result', 'Result']] : hasChart(q) ? [['chart', 'Chart']] : []), ...(pivotColumns(q) ? [['pivot', 'Pivot']] : []),
     ...(isKpi(q) ? [] : [['table', 'Table']]), ['sql', 'SQL'], ['explain', 'How it was made']]
   const [tab, setTab] = useState(tabs[0][0])
   const copy = () => navigator.clipboard.writeText(q.sql).then(
@@ -496,7 +556,8 @@ function Detail({ q }) {
       jsx('button', { role: 'tab', 'aria-selected': tab === id, className: 'gr-tab', onClick: () => setTab(id), children: label }, id)) }),
     jsxs('div', { role: 'tabpanel', className: 'gr-panel', children: [
       tab === 'result' ? jsx(Kpis, { q }) : null,
-      tab === 'chart' ? jsx(ChartView, { q }) : null,
+      tab === 'chart' ? jsx(ChartView, { q, onDrill }) : null,
+      tab === 'pivot' ? jsx(Pivot, { q }) : null,
       tab === 'table' ? jsx(Table, { q }) : null,
       tab === 'sql' ? jsx('pre', { className: 'gr-sql', children: q.sql }) : null,
       tab === 'explain' ? jsx(Explain, { id: q.id }) : null
@@ -505,7 +566,7 @@ function Detail({ q }) {
   ] })
 }
 
-function Queries({ filter, selected, setSelected }) {
+function Queries({ filter, selected, setSelected, onDrill }) {
   const data = useData(filter ? `/queries?dataset=${filter}` : '/queries')
   if (data.isLoading) return jsx('p', { className: 'gr-muted gr-pad', children: 'Loading…' })
   if (data.error) return jsx('p', { className: 'gr-error gr-pad', children: errorText(data.error) })
@@ -517,7 +578,7 @@ function Queries({ filter, selected, setSelected }) {
       jsxs('span', { className: 'gr-item-top', children: [jsx('span', { className: 'gr-qid', children: q.id }), jsx('b', { children: q.purpose || q.question || q.sql })] }),
       jsx('span', { className: 'gr-item-sub', children: `${ago(q.created_at)} · ${q.datasets.join(', ')}` })
     ] }, q.id)) }),
-    jsx(Detail, { q: current }, current.id)
+    jsx(Detail, { q: current, onDrill }, current.id)
   ] })
 }
 
@@ -533,9 +594,11 @@ function Select({ value, onChange, options }) {
     children: options.map(([v, label]) => jsx('option', { value: v, children: label }, v)) })
 }
 
-function NewChart({ datasets, onDone, onClose }) {
+function NewChart({ datasets, preset, onDone, onClose }) {
   const files = datasets.filter((d) => !d.missing)
-  const [form, setForm] = useState({ dataset: files[0]?.name || '', table: '', group: '', bucket: 'month', measure: 'count', column: '', fcol: '', op: '=', value: '' })
+  const [form, setForm] = useState({ dataset: files[0]?.name || '', table: '', group: '', group2: '', bucket: 'month', measure: 'count', column: '', fcol: '', op: '=', value: '', ...preset })
+  const box = useRef(null)
+  useEffect(() => { box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [])
   const set = (patch) => setForm((f) => ({ ...f, ...patch }))
   const meta = useData(form.dataset ? `/datasets/${form.dataset}/columns` : null, false)
   const make = useMutation({
@@ -547,15 +610,18 @@ function NewChart({ datasets, onDone, onClose }) {
   const cols = table?.columns || []
   const nums = cols.filter((c) => c.kind === 'number').sort((a, b) => isId(a.name) - isId(b.name))  // ids last: nobody totals them
   const groupKind = cols.find((c) => c.name === form.group)?.kind
+  const across = cols.filter((c) => c.kind === 'text' && c.name !== form.group)
+  const group2 = form.group && across.some((c) => c.name === form.group2) ? form.group2 : ''
   const column = nums.some((c) => c.name === form.column) ? form.column : nums[0]?.name || ''
   const submit = (e) => {
     e.preventDefault()
-    make.mutate({ dataset: form.dataset, table: table?.table, group: form.group || null, bucket: groupKind === 'time' ? form.bucket : null,
+    make.mutate({ dataset: form.dataset, table: table?.table, group: form.group || null, group2: group2 || null, bucket: groupKind === 'time' ? form.bucket : null,
       measure: form.measure, column: form.measure === 'count' ? null : column,
       filter: form.fcol ? { column: form.fcol, op: form.op, value: form.value } : null })
   }
   const colOpts = cols.map((c) => [c.name, c.name])
-  return jsxs('form', { className: 'gr-builder', onSubmit: submit, 'aria-label': 'New chart', children: [
+  return jsxs('form', { className: 'gr-builder', ref: box, onSubmit: submit, 'aria-label': 'New chart', children: [
+    preset?.fcol ? jsx('p', { className: 'gr-builder-note', children: `Only rows where ${preset.fcol} = ${preset.value}. Pick what to group them by.` }) : null,
     jsxs('div', { className: 'gr-fields', children: [
       jsx(Field, { label: 'File', children: jsx(Select, { value: form.dataset, onChange: (v) => set({ dataset: v, table: '', group: '', column: '', fcol: '' }), options: files.map((d) => [d.name, d.name]) }) }),
       tables.length > 1 ? jsx(Field, { label: 'Table', children: jsx(Select, { value: table.table, onChange: (v) => set({ table: v, group: '', column: '', fcol: '' }), options: tables.map((t) => [t.table, t.table]) }) }) : null,
@@ -563,6 +629,7 @@ function NewChart({ datasets, onDone, onClose }) {
       form.measure !== 'count' ? jsx(Field, { label: 'Of', children: jsx(Select, { value: column, onChange: (v) => set({ column: v }), options: nums.map((c) => [c.name, c.name]) }) }) : null,
       jsx(Field, { label: 'Group by', children: jsx(Select, { value: form.group, onChange: (v) => set({ group: v }), options: [['', 'Nothing (one number)'], ...colOpts] }) }),
       groupKind === 'time' ? jsx(Field, { label: 'Per', children: jsx(Select, { value: form.bucket, onChange: (v) => set({ bucket: v }), options: [['day', 'Day'], ['month', 'Month'], ['year', 'Year']] }) }) : null,
+      form.group && across.length ? jsx(Field, { label: 'And by (pivot)', children: jsx(Select, { value: group2, onChange: (v) => set({ group2: v }), options: [['', 'Nothing'], ...across.map((c) => [c.name, c.name])] }) }) : null,
       jsx(Field, { label: 'Only rows where', children: jsx(Select, { value: form.fcol, onChange: (v) => set({ fcol: v }), options: [['', 'All rows'], ...colOpts] }) }),
       form.fcol ? jsx(Field, { label: 'Is', children: jsx(Select, { value: form.op, onChange: (v) => set({ op: v }), options: [['=', '='], ['!=', '≠'], ['>', '>'], ['<', '<'], ['>=', '≥'], ['<=', '≤']] }) }) : null,
       form.fcol ? jsx(Field, { label: 'Value', children: jsx('input', { className: 'gr-select', value: form.value, onChange: (e) => set({ value: e.target.value }), required: true }) }) : null
@@ -599,9 +666,9 @@ function GrimoirePage() {
       ] }) : null,
       jsxs('section', { className: 'gr-grow', children: [
         jsxs('h3', { className: 'gr-h', children: ['Saved queries', filter ? jsx('button', { className: 'gr-chip gr-filter', onClick: () => setFilter(null), children: `${filter} ×` }) : null,
-          files.length && !building ? jsx('button', { className: 'gr-btn gr-small gr-push', onClick: () => setBuilding(true), children: '+ New chart' }) : null] }),
-        building ? jsx(NewChart, { datasets: files, onClose: () => setBuilding(false), onDone: (id) => { setBuilding(false); setFilter(null); setSelected(id) } }) : null,
-        jsx(Queries, { filter, selected, setSelected }, filter || 'all')
+          files.length && !building ? jsx('button', { className: 'gr-btn gr-small gr-push', onClick: () => setBuilding({}), children: '+ New chart' }) : null] }),
+        building ? jsx(NewChart, { datasets: files, preset: building.preset, onClose: () => setBuilding(false), onDone: (id) => { setBuilding(false); setFilter(null); setSelected(id) } }, JSON.stringify(building)) : null,
+        jsx(Queries, { filter, selected, setSelected, onDrill: (preset) => setBuilding({ preset }) }, filter || 'all')
       ] })
     ] })
   ] })
@@ -645,6 +712,11 @@ const CSS = `
 .gr-select{font:inherit;font-size:12px;color:var(--foreground);background:var(--background);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:4px 8px;min-width:120px;max-width:220px}
 .gr-builder .gr-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.gr-builder .gr-muted{margin:0}
 .gr-cta:disabled{opacity:.6;cursor:default}
+.gr-builder-note{margin:0;font-size:12px;color:var(--foreground)}
+[data-pick]{cursor:pointer}.gr-bar-row[data-pick]:hover .gr-bar,.gr-col[data-pick]:hover,.gr-slice[data-pick]:hover{filter:brightness(1.15)}
+.gr-trend{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}.gr-trend .gr-muted{margin:0}.gr-trend b{font-size:20px;font-weight:600}
+.gr-delta{font-size:12px;color:var(--ui-text-secondary)}
+.gr-pivot th{text-align:left;font-weight:500}.gr-table.gr-pivot td.gr-num[style]{background:color-mix(in srgb,var(--s1) var(--heat),transparent)}
 .gr-pending-text{flex:1;min-width:0}.gr-pending ul{margin:4px 0 0;padding-left:18px;color:var(--ui-text-secondary)}.gr-actions{display:flex;gap:8px}
 .gr-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ui-stroke-secondary);border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer;color:var(--foreground);background:transparent}
 .gr-btn:hover{background:var(--chrome-action-hover)}.gr-small{padding:3px 9px;font-size:12px}.gr-btn[data-armed]{color:var(--ui-red,var(--foreground));border-color:currentColor}

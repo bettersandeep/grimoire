@@ -364,9 +364,18 @@ def test_analysis_checks(tmp, db):
     assert pkg.audit._constants("floor(fare_amount / 5) * 5 AS bucket, count(*)") == []  # a bucket width
     # one value spelled two ways in the result: a warning, so the verdict is not "ready to share"
     q = {"columns": ["region", "revenue"], "rows": [["North", 29.0], ["South", 24.5], ["north ", 3.0], ["N. Region", 0.9]]}
-    assert pkg.audit._result_variants(q) == "'North' / 'north '"
+    assert pkg.audit._result_variants(q) == "'North' / 'north ' / 'N. Region'", pkg.audit._result_variants(q)
     assert pkg.audit._result_variants({"columns": ["region", "n"], "rows": [["North", 1], ["South", 2]]}) is None
     assert pkg.audit._result_variants({"columns": ["n", "m"], "rows": [[1, 2], [1, 3]]}) is None
+    vg = pkg.engine.variant_groups  # general signs, not rules for one dataset
+    assert vg({"Electronics": 900, "Electroncs": 4, "Toys": 300}) == [["Electronics", "Electroncs"]]
+    assert vg({"California": 500, "Calif.": 7, "Colorado": 300}) == [["California", "Calif."]]
+    assert vg({"North": 900, "north ": 40, "N. Region": 30, "South": 800}) == [["North", "north ", "N. Region"]]
+    for real in ({"Austria": 50, "Australia": 60}, {"Size S": 10, "Size M": 12}, {"Small": 100, "Smalt": 90},
+                 {"Mr.": 10, "Mrs.": 9}, {"St. Louis": 40, "Stockholm": 900, "Stuttgart": 300}):
+        assert vg(real) == [], real
+    assert pkg.audit._result_variants({"columns": ["category", "units"], "rows": [["Toys", 50], ["Electronics", 900], ["Electroncs", 3]]}) \
+        == "'Electronics' / 'Electroncs'"
 
 
 def eng_of():
@@ -519,7 +528,7 @@ def test_charts():
     assert report._order(["Wed", "Monday", "sunday", "Jan", "x", 3, 1]) == [1, 3, "Monday", "Wed", "sunday", "Jan", "x"]
     q = {"id": "q1", "columns": ["day", "hour", "trips"], "rows": grid}
     svg = report.chart_svg(q)
-    assert svg.count('class="cell"') == 72 and svg.index(">Sunday<") > svg.index(">Tuesday<") and "Stronger color" in svg
+    assert svg.count('class="cell h') == 72 and svg.index(">Sunday<") > svg.index(">Tuesday<") and "Stronger color" in svg
     evil = {"id": "q2", "columns": ["a<b>", "n"], "rows": [["<script>", 1], ["x", 2]]}
     assert "<script>" not in report.chart_svg(evil) and "&lt;script&gt;" in report.chart_svg(evil)
     assert report.chart_svg({"id": "q3", "columns": ["a", "b"], "rows": [[0, 1], [1, 2], [2, 3]]}).count('class="bar"') == 3
@@ -646,7 +655,9 @@ def test_builder(tmp, db):
     assert eng.query(sql)[1] == [[1]], sql  # a quote in a value stays a value
     sql, _ = b.build('"shop"', types, {"measure": "count", "filter": {"column": "amount", "op": ">", "value": "6"}})
     assert eng.query(sql)[1] == [[2]], sql
-    for bad in ({"group": "nope"}, {"measure": "sum", "column": "region"}, {"measure": "drop"},
+    sql, purpose = b.build('"shop"', types, {"group": "region", "group2": "day", "measure": "count"})
+    assert eng.query(sql)[1][0] == ["North", "2026-01-03", 1] and purpose.startswith("Rows per region and day"), (sql, purpose)
+    for bad in ({"group": "region", "group2": "region"}, {"group": "nope"}, {"measure": "sum", "column": "region"}, {"measure": "drop"},
                 {"group": "region", "bucket": "month"}, {"filter": {"column": "amount", "op": ";", "value": "1"}},
                 {"filter": {"column": "amount", "op": "=", "value": ""}}):
         try:

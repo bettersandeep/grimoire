@@ -10,6 +10,11 @@ import tempfile
 
 from . import audit, engine, learning, metrics, report, store, tools, walkthrough
 
+
+def _n(count, word, plural=None):
+    return f"{count:,} {word if count == 1 else plural or word + 's'}"
+
+
 HELP = """Commands:
   /grimoire                          status
   /grimoire setup                    use fewer tokens: a Data bot with only Grimoire's tools
@@ -96,7 +101,7 @@ def run(raw_args="", **kwargs):
                     "The files did not change.") if changed else "No merges are waiting for approval."
         if cmd == "merges" and rest[:1] == ["reject"]:
             n = store.reject_merges(db)
-            return f"Dropped {n} proposed merge(s)." if n else "No merges are waiting for approval."
+            return f"Dropped {_n(n, 'proposed merge')}." if n else "No merges are waiting for approval."
         if cmd == "merges":
             return _merges(db, rest[0] if rest else None)
         if cmd == "unmerge" and rest and len(rest) <= 2:
@@ -107,7 +112,7 @@ def run(raw_args="", **kwargs):
                 return f"No merge rules for {where}."
             if dataset in eng.datasets:
                 eng.set_merges(dataset, store.merges(db, dataset))
-            return f"Removed {removed} merge rule(s) from {where}. Later queries use the original values."
+            return f"Removed {_n(removed, 'merge rule')} from {where}. Later queries use the original values."
         if cmd == "forget" and len(rest) == 1:
             counts = store.forget_dataset(db, rest[0])
             if rest[0] in eng.datasets:
@@ -115,14 +120,14 @@ def run(raw_args="", **kwargs):
             if not any(counts.values()):
                 return f"Nothing saved for {rest[0]}."
             tools.forget_values()
-            return (f"Deleted {rest[0]}: {counts['columns']} column profile(s) and notes, "
-                    f"{counts['merges'] + counts['pending_merges']} merge rule(s), {counts['queries']} saved "
-                    "query(ies). The file did not change. Hermes chat history keeps its own copy of past "
+            return (f"Deleted {rest[0]}: {_n(counts['columns'], 'column profile')} and notes, "
+                    f"{_n(counts['merges'] + counts['pending_merges'], 'merge rule')}, {_n(counts['queries'], 'saved query', 'saved queries')}. "
+                    "The file did not change. Hermes chat history keeps its own copy of past "
                     "results; delete those sessions in Hermes to remove it.")
         if cmd == "clear" and rest == ["history"]:
             n = store.clear_history(db)
             tools.forget_values()
-            return f"Deleted {n} saved query(ies) and their results. Files, notes and merges stay."
+            return f"Deleted {_n(n, 'saved query', 'saved queries')} and their results. Files, notes and merges stay."
         if cmd == "reset":
             if rest != ["confirm"]:
                 return ("This deletes every saved file entry, column note, merge rule and query, and cannot "
@@ -185,9 +190,9 @@ def _rerun(db, eng, qid):
         return f"{q['id']} could not run again: {exc}"
     norm = lambda rs: json.loads(json.dumps(rs, default=str))
     if norm(rows) == norm(q["rows"]):
-        return f"{q['id']} still holds: the same {len(rows)} row(s) as when it was saved."
+        return f"{q['id']} still holds: the same {_n(len(rows), 'row')} as when it was saved."
     diff = next((i for i, (a, b) in enumerate(zip(norm(rows), norm(q["rows"]))) if a != b), min(len(rows), len(q["rows"])))
-    return (f"{q['id']} changed since it was saved: {len(q['rows'])} row(s) then, {len(rows)} now; "
+    return (f"{q['id']} changed since it was saved: {_n(len(q['rows']), 'row')} then, {len(rows)} now; "
             f"first difference at row {diff + 1}. The file or a merge rule changed. Answers that cite "
             f"{q['id']} are out of date.")
 
@@ -202,7 +207,7 @@ def _report(db, dataset, eng=None):
     path = os.path.join(folder, f"report-{datetime.datetime.now():%Y%m%d-%H%M%S}.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(report.html_report(queries, title, _report_context(db, eng, queries)))
-    return f"Saved a report of {len(queries)} query(ies): {path}\nOpen it in a browser: file://{path}"
+    return f"Saved a report of {_n(len(queries), 'query', 'queries')}: {path}\nOpen it in a browser: file://{path}"
 
 
 def _report_context(db, eng, queries):
