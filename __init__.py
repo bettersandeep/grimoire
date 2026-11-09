@@ -8,6 +8,7 @@ _HANDLERS = {
     "grimoire_attach": tools.attach,
     "grimoire_profile": tools.profile,
     "grimoire_query": tools.query,
+    "grimoire_drivers": tools.drivers,
     "grimoire_note": tools.note,
     "grimoire_merge": tools.merge,
     "grimoire_catalog": tools.catalog,

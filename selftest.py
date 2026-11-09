@@ -12,6 +12,7 @@ sys.path.insert(0, str(HERE.parent))
 pkg = importlib.import_module(HERE.name)
 commands, engine, guard, learning, schemas, store, tools, verify = (
     pkg.commands, pkg.engine, pkg.guard, pkg.learning, pkg.schemas, pkg.store, pkg.tools, pkg.verify)
+drivers_mod = pkg.drivers
 
 
 # A real reply from a Hermes session (2026-11-08) with the results it was based on.
@@ -304,6 +305,29 @@ def test_metrics(tmp, db):
     assert "error" in call(tools.query, sql="SELECT revenue() FROM pay")  # gone: no silent fallback
 
 
+def test_drivers(tmp, db):
+    tools.setup(db=db, eng=None)
+    (tmp / "shop.csv").write_text("day,region,item,amount\n"
+                                  "2026-02-01,North,a,100\n2026-02-02,South,a,100\n2026-02-03,South,b,50\n"
+                                  "2026-03-01,North,a,160\n2026-03-02,South,a,40\n2026-03-05,West,b,50\n")
+    call(tools.attach, path=str(tmp / "shop.csv"))
+    r = call(tools.drivers, dataset="shop", measure="sum(amount)", time_column="day", before="2026-02", after="2026-03")
+    assert r["split_by"] == ["region", "item"], r
+    rows = {(x[0], x[1]): x[2:] for x in r["rows"]}
+    assert rows[("(total)", None)] == [250, 250, 0, 100.0], rows
+    assert rows[("region", "North")][:3] == [100, 160, 60] and rows[("region", "West")][:3] == [None, 50, 50], rows
+    assert "add up to 100" in r["how_to_read"]
+    assert store.get_query(db, r["id"])["purpose"].startswith("What drives the change")  # citable receipt
+    r = call(tools.drivers, dataset="shop", measure="avg(amount)", time_column="day", before="2026-02", after="2026-03",
+             dimensions=["region"])
+    assert r["split_by"] == ["region"] and "does not add up" in r["how_to_read"], r
+    assert drivers_mod.additive("sum(x) / 100") and drivers_mod.additive("count(*)") and not drivers_mod.additive("avg(x)")
+    assert not drivers_mod.additive("sum(a) / sum(b)")
+    for bad in [dict(before="Feb", after="2026-03"), dict(before="2030-01", after="2030-02"), dict(time_column="nope")]:
+        args = dict(dataset="shop", time_column="day", before="2026-02", after="2026-03") | bad
+        assert "error" in call(tools.drivers, **args), bad
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -448,6 +472,7 @@ def main():
     test_data_plugin(tmp, db)
     test_audit(tmp, db)
     test_metrics(tmp, db)
+    test_drivers(tmp, db)
     print("selftest passed")
 
 

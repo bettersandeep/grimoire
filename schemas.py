@@ -97,6 +97,30 @@ MERGE = {
     },
 }
 
+DRIVERS = {
+    "name": "grimoire_drivers",
+    "description": (
+        "Explain what drives a change between two periods, split by category columns. "
+        "Use it for questions like 'why did revenue drop in March?'. Returns the total change and the "
+        "segments (for example region = North) that moved most, with their share of the change, as a "
+        "query id you can cite."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "dataset": {"type": "string", "description": "Dataset name from grimoire_attach."},
+            "measure": {"type": "string", "description": "An SQL aggregate, like sum(amount_paise) / 100, or a saved metric like revenue(). Default count(*)."},
+            "time_column": {"type": "string", "description": "The date or timestamp column."},
+            "before": {"type": "string", "description": "Earlier period: 2026, 2026-02 or 2026-02-15."},
+            "after": {"type": "string", "description": "Later period, same form."},
+            "dimensions": {"type": "array", "items": {"type": "string"}, "description": "Optional columns to split by. Default: text columns with 2 to 50 values."},
+            "table": {"type": "string", "description": "Table reference. Optional for CSV, JSON and Parquet."},
+            "purpose": {"type": "string", "description": "One short line: what this answers."},
+        },
+        "required": ["dataset", "time_column", "before", "after"],
+    },
+}
+
 CATALOG = {
     "name": "grimoire_catalog",
     "description": (
@@ -106,4 +130,4 @@ CATALOG = {
     "parameters": {"type": "object", "properties": {}},
 }
 
-ALL = [ATTACH, PROFILE, QUERY, NOTE, MERGE, CATALOG]
+ALL = [ATTACH, PROFILE, QUERY, DRIVERS, NOTE, MERGE, CATALOG]
