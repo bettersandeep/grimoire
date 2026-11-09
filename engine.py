@@ -326,6 +326,13 @@ class Engine:
         rows = [[to_json_value(v) for v in row] for row in rows[:MAX_ROWS]]
         return columns, rows, truncated
 
+    def function_exists(self, name):
+        with self._lock:
+            if self._con is None:
+                return False
+            return bool(self._con.execute(
+                "SELECT count(*) FROM duckdb_functions() WHERE function_name = ?", [name]).fetchone()[0])
+
     def row_count(self, table):
         return self.query(f"SELECT count(*) FROM {table}", SETUP_TIMEOUT_S)[1][0][0]
 

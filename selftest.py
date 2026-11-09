@@ -283,6 +283,27 @@ def test_audit(tmp, db):
     assert "Verdict: share with caveats." in out and "Watch out:" in out, out
 
 
+def test_metrics(tmp, db):
+    tools.setup(db=db, eng=None)
+    (tmp / "pay.csv").write_text("region,amount_paise\nNorth,1000\nNorth,2500\nSouth,\n")
+    call(tools.attach, path=str(tmp / "pay.csv"))
+    out = commands.run("define revenue = sum(amount_paise) / 100")
+    assert out.startswith("Saved revenue() = sum(amount_paise) / 100") and "pay" in out, out
+    for bad, why in [("define sum = sum(x)", "already a DuckDB function"), ("define r = sum(nope)", "does not work"),
+                     ("define r = 1; DROP VIEW pay", "one SQL expression"), ("define Bad Name = 1", "lower-case name"),
+                     ("define revenue", "Use: /grimoire define")]:
+        assert why in commands.run(bad), (bad, commands.run(bad))
+    r = call(tools.query, sql="SELECT region, Revenue() AS rev FROM pay GROUP BY 1 ORDER BY 1")
+    assert r["rows"] == [["North", 35.0], ["South", None]] and "revenue()" in r["metrics"], r
+    assert "(sum(amount_paise) / 100)" in store.get_query(db, r["id"])["sql"]  # the receipt shows the real SQL
+    assert "revenue() = sum(amount_paise) / 100" in tools.auto_attach(f"total in {tmp / 'pay.csv'}", "m")
+    assert call(tools.catalog)["metrics"] == {"revenue()": "sum(amount_paise) / 100"}
+    assert "error" in call(tools.query, sql="SELECT revenue(); SELECT 1")  # expansion keeps the one-SELECT rule
+    assert commands.run("metrics") == "revenue() = sum(amount_paise) / 100"
+    assert commands.run("undefine revenue") == "Removed revenue()."
+    assert "error" in call(tools.query, sql="SELECT revenue() FROM pay")  # gone: no silent fallback
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -426,6 +447,7 @@ def main():
     test_auto_attach(tmp, db)
     test_data_plugin(tmp, db)
     test_audit(tmp, db)
+    test_metrics(tmp, db)
     print("selftest passed")
 
 

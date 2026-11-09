@@ -226,6 +226,10 @@ function GrimoirePage() {
     jsxs('main', { className: 'gr-body', children: [
       jsx(Pending, { pending: summary.data?.pending, act }),
       jsxs('section', { children: [jsx('h3', { className: 'gr-h', children: 'Files' }), jsx(Files, { datasets: summary.data?.datasets, act, filter, setFilter })] }),
+      summary.data?.metrics?.length ? jsxs('section', { children: [
+        jsx('h3', { className: 'gr-h', children: 'Saved metrics' }),
+        jsx('div', { className: 'gr-chips', children: summary.data.metrics.map((m) => jsxs('span', { className: 'gr-chip gr-metric', title: 'Remove with /grimoire undefine ' + m.name, children: [jsx('b', { children: `${m.name}()` }), ` = ${m.expression}`] }, m.name)) })
+      ] }) : null,
       jsxs('section', { className: 'gr-grow', children: [
         jsxs('h3', { className: 'gr-h', children: ['Saved queries', filter ? jsx('button', { className: 'gr-chip gr-filter', onClick: () => setFilter(null), children: `${filter} ×` }) : null] }),
         jsx(Queries, { filter }, filter || 'all')
@@ -265,7 +269,7 @@ const CSS = `
 .gr-chips{display:flex;flex-wrap:wrap;gap:4px}
 .gr-chip{display:inline-flex;align-items:center;font-size:11px;padding:1px 7px;border-radius:5px;border:0;font-family:inherit;color:var(--ui-text-secondary);background:var(--chrome-action-hover);white-space:nowrap}
 .gr-issue{color:var(--ui-yellow,var(--ui-text-secondary));background:color-mix(in srgb,var(--ui-yellow,var(--ui-text-tertiary)) 14%,transparent);max-width:100%;overflow:hidden;text-overflow:ellipsis}
-.gr-warn{color:var(--ui-red,var(--foreground))}.gr-filter{cursor:pointer}
+.gr-warn{color:var(--ui-red,var(--foreground))}.gr-metric{font-family:var(--font-mono,ui-monospace,monospace);white-space:normal}.gr-metric b{font-weight:600;margin-right:2px;color:var(--foreground)}.gr-filter{cursor:pointer}
 .gr-meta{font-size:12px;color:var(--ui-text-tertiary);overflow-wrap:anywhere}
 .gr-grow{flex:1;min-height:320px;display:flex;flex-direction:column}
 .gr-split{flex:1;min-height:0;display:flex;border:1px solid var(--ui-stroke-secondary);border-radius:8px;overflow:hidden}

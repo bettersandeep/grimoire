@@ -73,6 +73,8 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 | `/grimoire chart q12` | A bar chart of a result |
 | `/grimoire rerun q12` | Run the SQL again and check the result still holds |
 | `/grimoire report [dataset]` | Save an HTML report of the last session's queries, or of one file's |
+| `/grimoire define revenue = sum(amount_paise) / 100` | Save a metric; answers then compute "revenue" the same way every time |
+| `/grimoire metrics` / `undefine <name>` | List or remove saved metrics |
 | `/grimoire learn on` / `off` | Learning mode |
 | `/grimoire learn predict on` / `off` | Guess the answer before you see it |
 | `/grimoire rejects` | Malformed lines that were skipped |

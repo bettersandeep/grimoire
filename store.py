@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS pending_merges (
     created_at REAL NOT NULL,
     PRIMARY KEY (dataset, tbl, col, from_value)
 );
+CREATE TABLE IF NOT EXISTS metrics (
+    name       TEXT PRIMARY KEY,
+    expression TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -112,7 +117,7 @@ def clear_history(db):
 
 
 def reset(db):
-    for table in ("datasets", "columns", "merges", "pending_merges", "queries", "settings"):
+    for table in ("datasets", "columns", "merges", "pending_merges", "queries", "settings", "metrics"):
         db.execute(f"DELETE FROM {table}")
     db.execute("DELETE FROM sqlite_sequence WHERE name = 'queries'")
     db.commit()
@@ -223,6 +228,23 @@ def merges(db, dataset):
     ):
         out.setdefault((tbl, col), {})[a] = b
     return out
+
+
+def define_metric(db, name, expression):
+    db.execute("INSERT INTO metrics (name, expression, created_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE "
+               "SET expression = excluded.expression, created_at = excluded.created_at", (name, expression, time.time()))
+    db.commit()
+
+
+def drop_metric(db, name):
+    n = db.execute("DELETE FROM metrics WHERE name = ?", (name,)).rowcount
+    db.commit()
+    return n
+
+
+def metrics(db):
+    """{name: expression}, oldest first."""
+    return dict(db.execute("SELECT name, expression FROM metrics ORDER BY created_at").fetchall())
 
 
 def save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=(), question=None):

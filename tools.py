@@ -10,6 +10,7 @@ from . import audit
 from . import engine
 from . import guard
 from . import learning
+from . import metrics
 from . import store
 from . import verify
 
@@ -333,7 +334,7 @@ def query(args, session_id=None, **kwargs):
     try:
         db, eng = _get()
         _sync(db, eng)
-        sql = args.get("sql", "")
+        sql, used = metrics.expand(args.get("sql", ""), store.metrics(db))
         columns, rows, truncated = eng.query(sql)
         with _lock:
             question = _messages.get(session_id or "")
@@ -343,6 +344,8 @@ def query(args, session_id=None, **kwargs):
         with _lock:
             _put(_last_qid, session_id, qid)
         result = {"id": qid, "columns": columns, "rows": rows, "note": UNTRUSTED}
+        if used:
+            result["metrics"] = f"Used saved metric(s): {', '.join(n + '()' for n in used)}."
         if truncated:
             result["truncated"] = f"Only the first {engine.MAX_ROWS} rows are shown. Aggregate in SQL instead."
         result["cite"] = f"Cite numbers from this result as [{qid}]."
@@ -411,6 +414,10 @@ def auto_attach(user_message, session_id=None, cwd=None):
             lines.append(f"  note on {col}: {text}")
     if not lines:
         return guard.data_file_hint(user_message)
+    saved = store.metrics(_get()[0])
+    if saved:
+        lines.append("Saved metrics (write name() in SQL; Grimoire fills in the definition): "
+                     + "; ".join(f"{n}() = {e}" for n, e in saved.items()))
     return (
         "[Grimoire] Data files are attached:\n" + "\n".join(lines) + "\n"
         "Answer with one call: tool_call with name \"grimoire_query\" and arguments "
@@ -470,7 +477,8 @@ def catalog(args, **kwargs):
                               for tbl, col, text in store.notes(db, name)]
             items.append(entry)
         recent = [{"id": f"q{i}", "purpose": p or s[:80]} for i, p, s in store.recent_queries(db)]
-        return _ok(datasets=items, recent_queries=recent)
+        saved = {f"{n}()": e for n, e in store.metrics(db).items()}
+        return _ok(datasets=items, recent_queries=recent, **({"metrics": saved} if saved else {}))
     except Exception as exc:
         return _err(f"catalog failed: {exc}")
 

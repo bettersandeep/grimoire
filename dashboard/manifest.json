@@ -3,7 +3,7 @@
   "label": "Data",
   "description": "Grimoire: your data files, saved queries with their SQL, merges and learning mode.",
   "icon": "Database",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "tab": {"hidden": true},
   "api": "plugin_api.py"
 }
