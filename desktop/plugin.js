@@ -130,6 +130,24 @@ function LeanTip({ tip, act }) {
   ] })
 }
 
+// Most serious first: a reader should see negative amounts before 9.7% empty cells.
+const RANK = ['duplicate rows', 'negative values', 'dates in the future', 'spelling variants of one value', 'same value in every row']
+export function issueRank(i) {
+  const k = RANK.indexOf(i.issue)
+  if (k >= 0) return k
+  if (i.issue === 'empty values') return 100 - Math.min(99, i.percent || 0) / 100
+  return RANK.length  // placeholders and numbers stored as text
+}
+
+function IssueChips({ issues }) {
+  const sorted = [...issues].sort((a, b) => issueRank(a) - issueRank(b))
+  const rest = sorted.slice(4)
+  return jsxs('div', { className: 'gr-chips', children: [
+    ...sorted.slice(0, 4).map((i, n) => jsx('span', { className: 'gr-chip gr-issue', children: issueText(i) }, n)),
+    rest.length ? jsx('span', { className: 'gr-chip', title: rest.map(issueText).join('\n'), children: `+${rest.length} more` }, 'more') : null
+  ] })
+}
+
 function issueText(i) {
   if (i.issue === 'duplicate rows') return `${fmt(i.rows)} duplicate rows`
   if (i.issue === 'empty values') return `${i.column}: ${fmt(i.percent)}% empty`
@@ -154,7 +172,7 @@ function Files({ datasets, act, filter, setFilter }) {
         children: armed === d.name ? 'Click again to delete' : 'Forget' })
     ] }),
     jsx('div', { className: 'gr-path', title: d.path, children: d.path }),
-    d.issues?.length ? jsx('div', { className: 'gr-chips', children: d.issues.slice(0, 4).map((i, n) => jsx('span', { className: 'gr-chip gr-issue', children: issueText(i) }, n)) }) : null,
+    d.issues?.length ? jsx(IssueChips, { issues: d.issues }) : null,
     d.merges?.length ? jsx('div', { className: 'gr-meta', children: 'Merges: ' + d.merges.map((m) => `${m.column} '${m.from}' → '${m.to}'`).join(' · ') }) : null,
     d.notes?.length ? jsx('div', { className: 'gr-meta', children: 'Notes: ' + d.notes.map((n) => `${n.column}: ${n.note}`).join(' · ') }) : null
   ] }, d.name)) })
@@ -201,6 +219,56 @@ function Line({ q, li, vi }) {
   ] })
 }
 
+// Heatmap, histogram and scatter: the plugin's Python picks the chart and orders the data; drawn here.
+function Heatmap({ c }) {
+  const vals = c.cells.map((t) => t[2]), lo = Math.min(...vals), hi = Math.max(...vals)
+  const W = 560, CH = 20, TOP = 20, L = 12 + 7 * Math.max(...c.ys.map((v) => v.slice(0, 14).length))
+  const cw = (W - L - 4) / c.xs.length, H = TOP + CH * c.ys.length
+  const every = Math.max(1, Math.ceil((7 * Math.max(...c.xs.map((v) => v.slice(0, 8).length))) / Math.max(1, cw - 4)))
+  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H + 20}`, role: 'img', 'aria-label': `${c.value} by ${c.x} and ${c.y}`, children: [
+    ...c.xs.map((v, i) => (i % every === 0 ? jsx('text', { x: L + cw * i + cw / 2, y: 13, textAnchor: 'middle', className: 'gr-tick', children: v.slice(0, 8) }, 'x' + i) : null)),
+    ...c.ys.map((v, j) => jsx('text', { x: L - 6, y: TOP + CH * j + 14, textAnchor: 'end', className: 'gr-tick', children: v.slice(0, 14) }, 'y' + j)),
+    ...c.cells.map(([i, j, v], n) => jsx('rect', { x: L + cw * i + 1, y: TOP + CH * j + 1, width: Math.max(1, cw - 2), height: CH - 2, rx: 2, className: 'gr-cell',
+      fillOpacity: 0.12 + 0.88 * ((v - lo) / (hi - lo || 1)), children: jsx('title', { children: `${c.xs[i]}, ${c.ys[j]}: ${fmt(v)}` }) }, 'c' + n)),
+    jsx('text', { x: L, y: H + 15, className: 'gr-tick', children: `Stronger color = more ${c.value}: from ${fmt(lo)} to ${fmt(hi)}.` }, 'legend')
+  ] })
+}
+
+function Histogram({ c }) {
+  const top = Math.max(...c.counts) || 1, marks = [0, top / 2, top]
+  const W = 560, H = 190, B = 22, L = 14 + 7 * Math.max(...marks.map((v) => compact(v).length))
+  const bw = (W - L - 10) / c.counts.length, y = (v) => 8 + (H - B - 8) * (1 - v / top)
+  const shown = ticks(c.starts.length, W - L - 10, 7 * Math.max(...c.starts.map((v) => compact(v).length))).filter((i) => i < c.starts.length - 1)
+  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${c.y} per bucket of ${c.x}`, children: [
+    ...marks.map((v, i) => jsxs('g', { children: [
+      jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
+      jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
+    ] }, 'g' + i)),
+    ...c.counts.map((n, i) => jsx('rect', { x: L + bw * i + 1, y: y(n), width: Math.max(1, bw - 2), height: Math.max(0, y(0) - y(n)), rx: 2, className: 'gr-cell',
+      children: jsx('title', { children: `${fmt(c.starts[i])} to ${fmt(c.starts[i] + c.step)}: ${fmt(n)}` }) }, 'b' + i)),
+    ...shown.map((i) => jsx('text', { x: L + bw * i, y: H - 5, textAnchor: i === 0 ? 'start' : 'middle', className: 'gr-tick', children: compact(c.starts[i]) }, 't' + i))
+  ] })
+}
+
+function Scatter({ c }) {
+  const xs = c.points.map((p) => p[0]), ys = c.points.map((p) => p[1])
+  const xlo = Math.min(...xs), xhi = Math.max(...xs), ylo = Math.min(0, ...ys), yhi = Math.max(...ys)
+  const W = 560, H = 230, B = 40, TOP = 22, L = 14 + 7 * Math.max(...[ylo, (ylo + yhi) / 2, yhi].map((v) => compact(v).length))
+  const x = (v) => L + 6 + (W - L - 20) * ((v - xlo) / (xhi - xlo || 1)), y = (v) => TOP + (H - B - TOP) * (1 - (v - ylo) / (yhi - ylo || 1))
+  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${c.y} against ${c.x}`, children: [
+    ...[ylo, (ylo + yhi) / 2, yhi].map((v, i) => jsxs('g', { children: [
+      jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
+      jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
+    ] }, 'g' + i)),
+    ...[xlo, (xlo + xhi) / 2, xhi].map((v, i) => jsx('text', { x: x(v), y: H - 22, textAnchor: 'middle', className: 'gr-tick', children: compact(v) }, 'x' + i)),
+    jsx('text', { x: L, y: 12, className: 'gr-tick', children: `${c.y} ↑` }, 'yn'),
+    jsx('text', { x: (L + W) / 2, y: H - 4, textAnchor: 'middle', className: 'gr-tick', children: `${c.x} →` }, 'xn'),
+    ...c.points.map(([a, b], i) => jsx('circle', { cx: x(a), cy: y(b), r: 4, className: 'gr-pt', children: jsx('title', { children: `${c.x} ${fmt(a)}, ${c.y} ${fmt(b)}` }) }, 'p' + i))
+  ] })
+}
+
+const CHARTS = { heatmap: Heatmap, histogram: Histogram, scatter: Scatter }
+
 function Bars({ q }) {
   const pick = chartColumns(q.columns, q.rows)
   if (!pick) return null
@@ -220,10 +288,7 @@ function Result({ q }) {
     return jsx('div', { className: 'gr-kpis', children: q.columns.map((c, i) => jsxs('div', { className: 'gr-kpi', children: [jsx('b', { children: fmt(q.rows[0][i]) }), jsx('span', { children: c })] }, c)) })
   const numeric = q.columns.map((_, i) => q.rows.length > 0 && q.rows.every((r) => isNum(r[i]) || r[i] === null))
   return jsxs('div', { children: [
-    q.chart?.svg
-      // Drawn by the plugin's own report code; every value in it is HTML-escaped there.
-      ? jsx('div', { className: 'gr-svg', dangerouslySetInnerHTML: { __html: q.chart.svg } })
-      : jsx(Bars, { q }),
+    CHARTS[q.chart?.kind] ? jsx(CHARTS[q.chart.kind], { c: q.chart }) : jsx(Bars, { q }),
     jsx('div', { className: 'gr-table-wrap', children: jsxs('table', { className: 'gr-table', children: [
       jsx('thead', { children: jsx('tr', { children: q.columns.map((c, i) => jsx('th', { className: numeric[i] ? 'gr-num' : '', children: c }, i)) }) }),
       jsx('tbody', { children: q.rows.map((r, n) => jsx('tr', { children: r.map((v, i) => jsx('td', { className: numeric[i] ? 'gr-num' : '', children: fmt(v) }, i)) }, n)) })
@@ -357,9 +422,7 @@ const CSS = `
 .gr-bar-row{display:contents}.gr-bar-label{text-align:right;color:var(--ui-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}
 .gr-bar-track{height:12px}.gr-bar{display:block;height:100%;min-width:2px;border-radius:2px;background:var(--ui-accent)}
 .gr-bar-value{font-variant-numeric:tabular-nums;color:var(--ui-text-secondary);font-size:12px}
-.gr-svg svg{width:100%;max-width:640px;margin:10px 0;display:block}.gr-svg .bar,.gr-svg .cell{fill:var(--ui-accent)}
-.gr-svg .pt{fill:var(--ui-accent);stroke:var(--background);stroke-width:2}.gr-svg .grid{stroke:var(--ui-stroke-secondary);stroke-width:1}
-.gr-svg .lbl{fill:var(--ui-text-tertiary);font-size:11px}
+.gr-cell{fill:var(--ui-accent)}.gr-pt{fill:var(--ui-accent);stroke:var(--background);stroke-width:2}
 .gr-line{width:100%;max-width:640px;margin:10px 0;display:block}.gr-path-line{fill:none;stroke:var(--ui-accent);stroke-width:2}
 .gr-dot{fill:var(--ui-accent)}.gr-grid{stroke:var(--ui-stroke-secondary)}.gr-tick{fill:var(--ui-text-tertiary);font-size:11px}
 .gr-table-wrap{overflow-x:auto;margin-top:8px}.gr-table{border-collapse:collapse;font-size:12px}

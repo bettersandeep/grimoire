@@ -98,9 +98,9 @@ def queries(dataset: str | None = None, limit: int = 30):
         q = store.get_query(db, qid)
         if q:
             q["total_rows"] = len(q["rows"])
-            kind = report.chart_kind(q["columns"], q["rows"])
-            if kind in ("heatmap", "histogram", "scatter"):  # drawn here from all rows; the page draws bars and lines
-                q["chart"] = {"kind": kind, "svg": report.chart_svg(q)}
+            chart = report.chart_data(q)  # heatmap, histogram or scatter, from all rows; the page draws it
+            if chart:
+                q["chart"] = chart
             q["rows"] = q["rows"][:50]
             out.append(q)
     return {"queries": out}

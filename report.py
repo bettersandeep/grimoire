@@ -119,7 +119,8 @@ def chart_kind(columns, rows):
     if len(columns) == 3 and len(nums) >= 1 and _heatmap_axes(columns, rows, nums):
         return "heatmap"
     if not texts and len(nums) >= 2:
-        if _even_steps([r[nums[0]] for r in rows]) and all((r[nums[1]] or 0) >= 0 for r in rows):
+        counts = [r[nums[1]] or 0 for r in rows]
+        if _even_steps([r[nums[0]] for r in rows]) and all(c >= 0 and float(c).is_integer() for c in counts):  # counts per bucket
             return "histogram"
         return "scatter" if len(rows) >= 5 else "bars"
     pick = chart_columns(columns, rows)
@@ -249,6 +250,31 @@ def _svg_scatter(q):
                    f'{html.escape(_fmt(a))}, {html.escape(q["columns"][1])} {html.escape(_fmt(b))}</title></circle>' for a, b in pts)
     return (f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{html.escape(q["columns"][1])} against '
             f'{html.escape(q["columns"][0])}">{grid}{ticks}{names}{dots}</svg>')
+
+
+def chart_data(q, limit=200):
+    """Plain data for the Desktop page to draw a heatmap, histogram or scatter itself; None otherwise."""
+    kind = chart_kind(q["columns"], q["rows"])
+    rows, cols = q["rows"][:limit], q["columns"]
+    try:
+        if kind == "heatmap":
+            x, y, vi = _heatmap_axes(cols, rows, _number_columns(cols, rows))
+            if len({r[x] for r in rows}) < len({r[y] for r in rows}):
+                x, y = y, x  # the axis with more values runs across, as in the report
+            xs, ys = _order({r[x] for r in rows}), _order({r[y] for r in rows})
+            xi, yi = {v: i for i, v in enumerate(xs)}, {v: i for i, v in enumerate(ys)}
+            cells = [[xi[r[x]], yi[r[y]], r[vi]] for r in rows if _numeric(r[vi])]
+            return {"kind": kind, "x": cols[x], "y": cols[y], "value": cols[vi],
+                    "xs": [str(v) for v in xs], "ys": [str(v) for v in ys], "cells": cells}
+        if kind == "histogram":
+            return {"kind": kind, "x": cols[0], "y": cols[1], "starts": [r[0] for r in rows],
+                    "counts": [r[1] or 0 for r in rows], "step": rows[1][0] - rows[0][0]}
+        if kind == "scatter":
+            return {"kind": kind, "x": cols[0], "y": cols[1],
+                    "points": [[r[0], r[1]] for r in rows if _numeric(r[0]) and _numeric(r[1])]}
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
+    return None
 
 
 def chart_svg(q):
