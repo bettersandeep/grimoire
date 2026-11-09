@@ -10,7 +10,7 @@ import re
 
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 _CITE = re.compile(r"\[\s*q\d+(?:\s*,\s*q\d+)*\s*\]|\bq\d+\b", re.I)
-_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+_DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
 _LIST_MARK = re.compile(r"(?m)^(\s*)\d+[.)](?=\s)")
 _NUM = re.compile(r"(?<![\w.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
 _SUFFIX = re.compile(
@@ -45,7 +45,8 @@ def extract(text):
         plain_int = decimals == 0 and "," not in core and not unit
         if plain_int and 1900 <= number <= 2100:
             continue  # a year
-        if plain_int and number >= 10 and str(int(number)).strip("0") == "1":
+        whole = number == int(number) and "," not in core and not unit
+        if whole and number >= 10 and str(int(number)).strip("0") == "1":
             # ponytail: powers of ten (100, 1000) are usually unit factors ("÷ 100"); a real
             # count of exactly 100 is skipped too. Tighten with context if that ever matters.
             continue
@@ -87,35 +88,73 @@ def _near(sorted_values, value, tol):
     return i < len(sorted_values) and sorted_values[i] <= value + tol
 
 
-def check(text, values, ignore=()):
-    """Split the claims in text into (sourced, unsourced) lists of raw strings.
+def _matches(pool, value, tol, percent):
+    return _near(pool, value, tol) or (percent and _near(pool, value / 100, tol / 100))
+
+
+MAX_PAIR_POOL = 300
+
+
+def _pairs(values, ratios):
+    out = set()
+    for i, a in enumerate(values):
+        for b in values[i + 1:]:
+            out |= {a + b, b - a}
+            if ratios and a and b:
+                out |= {b / a, 100 * b / a, a / b, 100 * a / b}
+    return out
+
+
+def check(text, values, ignore=(), totals=()):
+    """Split the claims in text into (sourced, derived, unsourced) lists of raw strings.
 
     values: numbers from tool results. ignore: raw strings to skip (numbers the user typed).
+    totals: column totals of cited results. A claim is "derived" when simple arithmetic on
+    sourced numbers gives it: a unit change (x100, /100, x1000, /1000), the sum, difference,
+    ratio or percent share of two numbers the reply shows, or a column total.
     """
     pool = sorted(set(values))
     ignored = {s.replace(",", "") for s in ignore}
-    sourced, unsourced = [], []
-    for claim in extract(text):
-        if claim["raw"].split()[0].rstrip("%").replace(",", "") in ignored:
-            continue
-        value = claim["value"]
-        ok = _near(pool, value, claim["tol"]) or (
-            claim["percent"] and _near(pool, value / 100, claim["tol"] / 100)
-        )
-        (sourced if ok else unsourced).append(claim["raw"])
-    return sourced, unsourced
+    claims = [c for c in extract(text) if c["raw"].split()[0].rstrip("%").replace(",", "") not in ignored]
+    sourced, rest = [], []
+    for claim in claims:
+        ok = _matches(pool, claim["value"], claim["tol"], claim["percent"])
+        (sourced if ok else rest).append(claim)
+    shown = {c["value"] for c in claims if c in sourced}
+    # powers of ten are skipped as claims, but "964 of 1000 rows" still uses 1000 as a sourced number
+    shown |= {float(m) for m in re.findall(r"(?<![\w.,])10+(?![\w,]|\.\d)", _CODE.sub(_blank, text or ""))
+              if _near(pool, float(m), 0.5)}
+    shown = sorted(shown)
+    sums = sorted(_pairs(shown, ratios=False))
+    # ponytail: pairs of pool values only while the pool is small (O(n^2)); cited results are usually small.
+    basis = sorted(set(shown) | {abs(t) for t in totals} | (set(pool) if len(pool) <= MAX_PAIR_POOL else set()))
+    other = _pairs(basis, ratios=True) | {abs(t) for t in totals}
+    for f in (100.0, 1000.0):
+        other |= {v * f for v in pool} | {v / f for v in pool}
+    wide = sorted(other)
+    derived, unsourced = [], []
+    for claim in rest:
+        # ponytail: a small whole number (under 100) is easy to hit by chance, so it may only be a sum or
+        # difference of two numbers the reply shows; bigger or decimal numbers may also be a unit change,
+        # ratio, share or column total.
+        small = claim["value"] < 100 and claim["value"] == int(claim["value"]) and not claim["percent"]
+        ok = _matches(sums if small else wide, claim["value"], claim["tol"], claim["percent"])
+        (derived if ok else unsourced).append(claim["raw"])
+    return [c["raw"] for c in sourced], derived, unsourced
 
 
-def footer(sourced, unsourced):
+def footer(sourced, unsourced, derived=()):
     """A short plain-text footer, or "" when the reply has no numeric claims."""
-    total = len(sourced) + len(unsourced)
+    traced = len(sourced) + len(derived)
+    total = traced + len(unsourced)
     if not total:
         return ""
+    how = f" ({len(derived)} by simple arithmetic: {' · '.join(dict.fromkeys(derived))})" if derived else ""
     if not unsourced:
-        what = "the number matches" if total == 1 else f"all {total} numbers match"
-        return f"\n\n---\nGrimoire check: {what} query results."
+        what = "the number traces" if total == 1 else f"all {total} numbers trace"
+        return f"\n\n---\nGrimoire check: {what} to query results{how}."
     missing = " · ".join(dict.fromkeys(unsourced))
     return (
-        f"\n\n---\nGrimoire check: {len(sourced)} of {total} numbers match query results. "
+        f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
         f"No source query for: {missing}"
     )

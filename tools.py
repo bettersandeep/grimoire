@@ -67,6 +67,18 @@ def remember_user_message(session_id, text):
             _put(_messages, session_id, str(text)[:500])
 
 
+def _column_totals(rows):
+    """Sum of each numeric column of a result with two or more rows."""
+    if len(rows) < 2:
+        return []
+    out = []
+    for i in range(len(rows[0])):
+        nums = [r[i] for r in rows if isinstance(r[i], (int, float)) and not isinstance(r[i], bool)]
+        if len(nums) >= 2:
+            out.append(sum(nums))
+    return out
+
+
 def record_guess(session_id, clarify_result):
     """Keep the user's answer to a clarify question while prediction mode is on."""
     try:
@@ -105,14 +117,16 @@ def check_reply(text, session_id=None):
     if not values and not cited:
         return ""  # Grimoire was not used here: do not open the database
     db, _eng = _get()
+    totals = []
     for qid in cited:
         q = store.get_query(db, qid)
         if q:
             values.extend(verify.numeric_values(q["rows"]))
+            totals.extend(_column_totals(q["rows"]))
     if not values:
         return ""
-    sourced, unsourced = verify.check(text, values, ignore=ignore)
-    out = verify.footer(sourced, unsourced)
+    sourced, derived, unsourced = verify.check(text, values, ignore=ignore, totals=totals)
+    out = verify.footer(sourced, unsourced, derived)
     learn, predict = learning_state()
     if predict:
         with _lock:
@@ -217,7 +231,7 @@ def attach(args, session_id=None, **kwargs):
             cols = eng.schema(sql_ref)
             store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
             tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
-        remember(session_id, [t["rows"] for t in tables])
+        remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
         result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
         skipped, first = eng.rejects(name)
         if skipped:
