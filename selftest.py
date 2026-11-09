@@ -202,6 +202,45 @@ def test_auto_attach(tmp, db):
     assert "(3 rows)" in tools.auto_attach("and shop/visits.csv now", "auto", cwd=str(tmp))
 
 
+def test_data_plugin(tmp, db):
+    tools.setup(db=db, eng=None)
+    # a folder or a pattern reads several files as one table, with a filename column
+    folder = tmp / "months"
+    folder.mkdir(exist_ok=True)
+    (folder / "jan.csv").write_text("day,amount\n2026-01-01,5\n2026-01-01,5\n")
+    (folder / "feb.csv").write_text("day,amount,note\n2026-02-01,7,x\n")
+    r = call(tools.attach, path=str(folder / "*.csv"), name="months")
+    assert r["tables"][0]["rows"] == 3 and "filename VARCHAR" in r["tables"][0]["columns"], r
+    assert call(tools.query, sql="SELECT sum(amount), count(note) FROM months")["rows"] == [[17, 1]]
+    (folder / "mar.csv").write_text("day,amount\n2026-03-01,100\n")  # a new file joins on the next attach
+    assert call(tools.attach, path=str(folder / "*.csv"), name="months")["tables"][0]["rows"] == 4
+    assert call(tools.attach, path=str(folder))["dataset"] == "months"
+    assert "error" in call(tools.attach, path=str(tmp / "nothing" / "*.csv"))
+    # duplicates and per-column statistics
+    p = call(tools.profile, dataset="months")
+    assert p["issues"][0] == {"issue": "duplicate rows", "rows": 1}, p["issues"]
+    st = call(tools.profile, dataset="months", column="amount")
+    assert st["median"] == 6.0 and st["max"] == 100 and st["outliers"]["rows"] == 1, st
+    assert st["outliers"]["most_extreme"] == [100], st
+    st = call(tools.profile, dataset="months", column="day")
+    assert st["rows_per_month"] == [["2026-01", 2], ["2026-02", 1], ["2026-03", 1]], st
+    assert "error" in call(tools.profile, dataset="months", column="nope")
+    # chart, rerun, report
+    q = call(tools.query, sql="SELECT strftime(day, '%Y-%m') AS month, sum(amount) AS total FROM months GROUP BY 1 ORDER BY 1",
+             purpose="total per month")
+    chart = commands.run(f"chart {q['id']}")
+    assert "2026-03  ████████████████████████████ 100" in chart, chart
+    assert "still holds" in commands.run(f"rerun {q['id']}")
+    (folder / "mar.csv").write_text("day,amount\n2026-03-01,1\n")
+    call(tools.attach, path=str(folder / "*.csv"), name="months")
+    assert "changed since it was saved" in commands.run(f"rerun {q['id']}")
+    out = commands.run("report months")
+    path = out.split(": ", 1)[1].split("\n")[0]
+    page = Path(path).read_text()
+    assert "total per month" in page and "SQL behind these numbers" in page and "<svg" in page, out
+    Path(path).unlink()
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -342,6 +381,7 @@ def main():
     test_security(tmp, db)
     test_learning(tmp, db)
     test_auto_attach(tmp, db)
+    test_data_plugin(tmp, db)
     print("selftest passed")
 
 

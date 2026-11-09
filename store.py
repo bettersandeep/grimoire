@@ -251,6 +251,29 @@ def get_query(db, query_id):
     }
 
 
+def queries_for(db, dataset=None, limit=30):
+    """Saved queries, oldest first: of one dataset, or else of the most recent session that ran one."""
+    cols = "id, session_id, sql, purpose, columns, rows, truncated, created_at, datasets, question"
+    if dataset:
+        rows = db.execute(f"SELECT {cols} FROM queries WHERE instr(',' || coalesce(datasets, '') || ',', "
+                          "',' || ? || ',') > 0 ORDER BY id DESC LIMIT ?", (dataset, limit)).fetchall()
+    else:
+        last = db.execute("SELECT session_id FROM queries ORDER BY id DESC LIMIT 1").fetchone()
+        if not last:
+            return []
+        rows = db.execute(f"SELECT {cols} FROM queries WHERE session_id IS ? ORDER BY id DESC LIMIT ?",
+                          (last[0], limit)).fetchall()
+    return [get_query(db, r[0]) for r in reversed(rows)]
+
+
+def data_dir(db):
+    """The folder that holds the plugin database, or None for an in-memory database."""
+    for _seq, name, path in db.execute("PRAGMA database_list").fetchall():
+        if name == "main" and path:
+            return path.rsplit("/", 1)[0]
+    return None
+
+
 def recent_queries(db, limit=5):
     return db.execute(
         "SELECT id, purpose, sql FROM queries ORDER BY id DESC LIMIT ?", (limit,)

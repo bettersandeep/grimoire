@@ -32,6 +32,8 @@ PROFILE = {
         "properties": {
             "dataset": {"type": "string", "description": "Dataset name from grimoire_attach."},
             "table": {"type": "string", "description": "Table reference. Optional for CSV and Parquet (one table)."},
+            "column": {"type": "string", "description": "Optional: one column for detailed statistics (quantiles, "
+                       "outliers, top values, or rows per month for dates)."},
         },
         "required": ["dataset"],
     },

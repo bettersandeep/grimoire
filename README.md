@@ -28,12 +28,14 @@ Update with `hermes plugins update grimoire`.
 
 | | |
 |---|---|
-| Reads files | CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet, SQLite |
+| Reads files | CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet, SQLite; a folder or `sales_*.csv` pattern as one table |
 | Answers in one step | When your message names a file, Grimoire opens it before the model starts, so the model answers with one query |
 | Answers with SQL | DuckDB in memory; the model sees schemas and small results, never the rows |
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | After each reply: which numbers trace to query results, which are derived by simple arithmetic, and which have no source |
-| Finds data problems | Malformed lines, empty values, numbers or dates stored as text, spelling variants ('North' and 'north ') |
+| Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, spelling variants ('North' and 'north ') |
+| Column statistics | Quantiles, outliers, top values, rows per month |
+| Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL |
 | Remembers | Files, column notes and merge rules across sessions |
 | Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
 | Teaches (opt-in) | A short SQL lesson and a better question after answers; optional "guess first" predictions |
@@ -47,6 +49,9 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 | `/grimoire` | Status: version, files, learning mode |
 | `/grimoire sql q12` | The SQL and result behind a number |
 | `/grimoire explain q12` | How your question became that SQL |
+| `/grimoire chart q12` | A bar chart of a result |
+| `/grimoire rerun q12` | Run the SQL again and check the result still holds |
+| `/grimoire report [dataset]` | Save an HTML report of the last session's queries, or of one file's |
 | `/grimoire learn on` / `off` | Learning mode |
 | `/grimoire learn predict on` / `off` | Guess the answer before you see it |
 | `/grimoire rejects` | Malformed lines that were skipped |
@@ -80,6 +85,7 @@ Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above 
 - **Files:** only the files the model attaches, read only. Inside DuckDB, all other file access, network access, extension loading and setting changes are off and locked.
 - **Private folders:** files in `~/.hermes`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, `~/.kube`, `~/.docker` and `~/Library` are refused (iCloud Drive and other cloud folders in `~/Library` are allowed). To allow them, set `plugins.entries.grimoire.settings.allow_private_folders: true`.
 - **Your files never change.** Merge rules apply inside Grimoire only.
+- **Reports** are written to `~/.hermes/plugin-data/grimoire/reports/` only when you run `/grimoire report`.
 - **Opening files before the model starts:** when your message names a data file that exists, Grimoire opens it (read only, same rules as above) and gives the model its table name and columns.
 - **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
 - **Network:** none. Grimoire makes no network calls; your model provider sees what the model sees, as with any Hermes tool.

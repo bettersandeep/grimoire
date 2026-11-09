@@ -242,7 +242,7 @@ def attach(args, session_id=None, **kwargs):
         if skipped:
             result["skipped_lines"] = {
                 "count": skipped,
-                "first": [f"line {line}: {err}: {text}" for line, err, text in first[:5]],
+                "first": [f"{where}: {err}: {text}" for where, err, text in first[:5]],
                 "note": "These lines are malformed and are not in any query result. Tell the user.",
             }
         rules = _merge_lines(eng.merges(name))
@@ -264,6 +264,14 @@ def profile(args, session_id=None, **kwargs):
         db, eng = _get()
         dataset = args.get("dataset", "")
         ref = _resolve_table(eng, dataset, args.get("table"))
+        if args.get("column"):
+            types = dict(eng.schema(_sql_ref(ref)))
+            column = args["column"]
+            if column not in types:
+                return _err(f"No column '{column}' in {ref}. Columns: {', '.join(types)}")
+            stats = eng.column_stats(_sql_ref(ref), column, types[column])
+            remember(session_id, stats)
+            return _ok(table=ref, **{k: _round(engine.to_json_value(v)) for k, v in stats.items()}, note=UNTRUSTED)
         rows, source = eng.profile(_sql_ref(ref))
         compact, saved = [], []
         for r in rows:
@@ -277,6 +285,10 @@ def profile(args, session_id=None, **kwargs):
             compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
         store.save_columns(db, dataset, ref, saved)
         issues = eng.issues(source, rows)
+        if source != "grimoire_sample":  # duplicates in a sample say nothing about the table
+            dupes = eng.duplicate_rows(_sql_ref(ref))
+            if dupes:
+                issues.insert(0, {"issue": "duplicate rows", "rows": dupes})
         store.set_json(db, f"issues:{dataset}", issues[:10])
         remember(session_id, [row[2:] for row in compact])
         remember(session_id, issues)
@@ -357,7 +369,7 @@ def auto_attach(user_message, session_id=None, cwd=None):
         path = os.path.expanduser(name)
         if not os.path.isabs(path):
             path = os.path.join(cwd or os.getcwd(), path)
-        if not os.path.isfile(path):
+        if not (os.path.isfile(path) or (engine.is_many(path) and engine.files_of(path))):
             continue
         try:
             result = json.loads(attach({"path": path}, session_id=session_id))
@@ -438,6 +450,17 @@ def catalog(args, **kwargs):
         return _ok(datasets=items, recent_queries=recent)
     except Exception as exc:
         return _err(f"catalog failed: {exc}")
+
+
+def _round(value):
+    """Floats to 4 significant decimals (fewer tokens); lists and dicts recursively."""
+    if isinstance(value, float):
+        return round(value, 2) if abs(value) >= 1 else round(value, 4)
+    if isinstance(value, list):
+        return [_round(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _round(v) for k, v in value.items()}
+    return value
 
 
 def _short(value, limit=40):

@@ -3,12 +3,20 @@
 import re
 from pathlib import Path
 
-from . import learning, store, tools
+import datetime
+import json
+import os
+import tempfile
+
+from . import learning, report, store, tools
 
 HELP = """Commands:
   /grimoire                          status
   /grimoire sql q12                  the SQL and result behind a query id
   /grimoire explain q12              how your question became that SQL
+  /grimoire chart q12                a bar chart of a result
+  /grimoire rerun q12                run the SQL again and check the result still holds
+  /grimoire report [dataset]         an HTML report of the last session's queries (or one file's)
   /grimoire learn on | off           learning mode: a short lesson after data answers
   /grimoire learn predict on | off   guess the answer before you see it (needs learning mode)
   /grimoire rejects [dataset]        malformed lines skipped when a file was read
@@ -37,6 +45,13 @@ def run(raw_args="", **kwargs):
             return _sql(db, rest[0])
         if cmd == "explain" and rest:
             return _explain(db, rest[0])
+        if cmd == "chart" and rest:
+            q = store.get_query(db, rest[0])
+            return report.text_chart(q) if q else f"No query {rest[0]}."
+        if cmd == "rerun" and rest:
+            return _rerun(db, eng, rest[0])
+        if cmd == "report":
+            return _report(db, rest[0] if rest else None)
         if cmd == "learn":
             return _learn(db, rest)
         if cmd == "rejects":
@@ -108,6 +123,36 @@ def _status(db, eng):
     return "\n".join(lines + ["", HELP])
 
 
+def _rerun(db, eng, qid):
+    q = store.get_query(db, qid)
+    if q is None:
+        return f"No query {qid}."
+    try:
+        _cols, rows, _trunc = eng.query(q["sql"])
+    except Exception as exc:
+        return f"{q['id']} could not run again: {exc}"
+    norm = lambda rs: json.loads(json.dumps(rs, default=str))
+    if norm(rows) == norm(q["rows"]):
+        return f"{q['id']} still holds: the same {len(rows)} row(s) as when it was saved."
+    diff = next((i for i, (a, b) in enumerate(zip(norm(rows), norm(q["rows"]))) if a != b), min(len(rows), len(q["rows"])))
+    return (f"{q['id']} changed since it was saved: {len(q['rows'])} row(s) then, {len(rows)} now; "
+            f"first difference at row {diff + 1}. The file or a merge rule changed. Answers that cite "
+            f"{q['id']} are out of date.")
+
+
+def _report(db, dataset):
+    queries = store.queries_for(db, dataset)
+    if not queries:
+        return "No saved queries to report yet." if not dataset else f"No saved queries for {dataset}."
+    title = f"Grimoire report: {dataset}" if dataset else "Grimoire report"
+    folder = os.path.join(store.data_dir(db) or tempfile.gettempdir(), "reports")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"report-{datetime.datetime.now():%Y%m%d-%H%M%S}.html")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(report.html_report(queries, title))
+    return f"Saved a report of {len(queries)} query(ies): {path}\nOpen it in a browser: file://{path}"
+
+
 def _learn(db, rest):
     if rest in (["on"], ["off"]):
         store.set_setting(db, "learn", rest[0])
@@ -154,7 +199,7 @@ def _rejects(eng, dataset):
             count, first = 0, []
         if count:
             out.append(f"{name}: {count} malformed line(s) skipped")
-            out += [f"  line {line}: {err}: {text}" for line, err, text in first]
+            out += [f"  {where}: {err}: {text}" for where, err, text in first]
     return "\n".join(out) or "No malformed lines in the attached files."
 
 
