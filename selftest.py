@@ -626,7 +626,7 @@ def test_lean_setup(tmp, db):
     assert "For fewer tokens: /grimoire setup" in commands.run("", session_id="full")
     assert store.get_json(db, "call_size", {}) == {"tools": 31, "tokens": 11200}
     text = commands.run("setup")
-    assert "New bot" in text and "Capabilities, then Toolsets" in text and "Grimoire never changes your settings" in text
+    assert "New bot" in text and "Capabilities, then Tools." in text and "Grimoire never changes your settings" in text
     assert "—" not in text
     # a chat that did not use Grimoire gets nothing
     assert tools.check_reply("Hello 42.", "other") == ""

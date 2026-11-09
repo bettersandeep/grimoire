@@ -39,7 +39,8 @@ A bot with only Grimoire's tools sends about a fifth of that, and answers faster
 In Hermes Desktop:
   1. Open the Bots tab, click +, then New bot. Name it data.
   2. Click Advanced (below Description). Under General, clone from the profile that has Grimoire (usually default).
-  3. Open Capabilities, then Toolsets. Switch off All, then switch on Grimoire and Clarifying Questions.
+  3. Open Capabilities, then Tools. Scroll down to the Build for Hermes box and switch off the switch in it (all tools).
+     Then search for grimoire and switch it on. Do the same for Clarifying Questions.
   4. Click Create bot, then ask data questions in the data bot's chat.
 Already made a bot? Open its menu, choose Edit..., then Advanced and Capabilities.
 Your main agent keeps all its tools. Grimoire never changes your settings.
