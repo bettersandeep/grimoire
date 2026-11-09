@@ -134,6 +134,7 @@ function LeanTip({ tip, act }) {
 function issueText(i) {
   if (i.issue === 'duplicate rows') return `${fmt(i.rows)} duplicate rows`
   if (i.issue === 'empty values') return `${i.column}: ${fmt(i.percent)}% empty`
+  if (i.rows) return `${i.column}: ${i.issue} (${fmt(i.rows)} rows)`
   if (i.issue === 'spelling variants of one value') return `${i.column}: ${i.variants.map((v) => `'${v.value}'`).join(' / ')}`
   return `${i.column}: ${i.issue}`
 }
@@ -145,6 +146,8 @@ function Files({ datasets, act, filter, setFilter }) {
     jsxs('div', { className: 'gr-file-top', children: [
       jsx('button', { className: 'gr-link', onClick: () => setFilter(filter === d.name ? null : d.name), title: 'Show only this file\'s queries', children: d.name }),
       jsx('span', { className: 'gr-chip', children: d.kind }),
+      d.health ? jsx('span', { className: 'gr-chip gr-health', 'data-level': d.health.score >= 90 ? 'good' : d.health.score >= 70 ? 'fair' : 'poor',
+        title: d.health.off.length ? `Health ${d.health.score}/100: ${d.health.off.join(', ')}` : 'No data problems found', children: `Health ${d.health.score}` }) : null,
       d.missing ? jsx('span', { className: 'gr-chip gr-warn', children: 'file missing' }) : null,
       jsx('button', { className: 'gr-btn gr-small gr-push', 'data-armed': armed === d.name || undefined,
         onClick: () => { if (armed === d.name) { setArmed(null); act.mutate({ path: `/datasets/${d.name}/forget` }) } else setArmed(d.name) },
@@ -322,6 +325,7 @@ const CSS = `
 .gr-chips{display:flex;flex-wrap:wrap;gap:4px}
 .gr-chip{display:inline-flex;align-items:center;font-size:11px;padding:1px 7px;border-radius:5px;border:0;font-family:inherit;color:var(--ui-text-secondary);background:var(--chrome-action-hover);white-space:nowrap}
 .gr-issue{color:var(--ui-yellow,var(--ui-text-secondary));background:color-mix(in srgb,var(--ui-yellow,var(--ui-text-tertiary)) 14%,transparent);max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.gr-health[data-level=good]{color:var(--ui-green,var(--ui-text-secondary))}.gr-health[data-level=fair]{color:var(--ui-yellow,var(--ui-text-secondary))}.gr-health[data-level=poor]{color:var(--ui-red,var(--foreground))}
 .gr-warn{color:var(--ui-red,var(--foreground))}.gr-metric{font-family:var(--font-mono,ui-monospace,monospace);white-space:normal}.gr-metric b{font-weight:600;margin-right:2px;color:var(--foreground)}.gr-filter{cursor:pointer}
 .gr-meta{font-size:12px;color:var(--ui-text-tertiary);overflow-wrap:anywhere}
 .gr-grow{flex:1;min-height:320px;display:flex;flex-direction:column}

@@ -69,6 +69,7 @@ def summary():
             "notes": [{"column": col, "note": text} for _t, col, text in store.notes(db, name)],
             "merges": _merge_lines(store.merges(db, name)),
             "issues": store.get_json(db, f"issues:{name}", []),
+            "health": store.get_json(db, f"health:{name}", None),
         })
     size = store.get_json(db, "call_size", {})
     lean_tip = size if size.get("tools", 0) > store.LEAN_TOOLS and store.get_setting(db, "lean_card", "") != "hidden" else None
