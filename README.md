@@ -1,6 +1,6 @@
 # Grimoire
 
-![Grimoire: a Hermes Agent plugin. Every number has a receipt.](assets/banner.jpg)
+![Grimoire, a Hermes Agent plugin by bettersandeep: every number in the answer has a receipt.](assets/banner.jpg)
 
 A Hermes Agent plugin for learning and exploring data with fewer tokens.
 Every number has a receipt.
