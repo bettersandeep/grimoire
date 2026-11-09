@@ -333,6 +333,23 @@ def test_drivers(tmp, db):
         assert "error" in call(tools.drivers, **args), bad
 
 
+def test_relations(tmp, db):
+    tools.setup(db=db, eng=None)
+    (tmp / "people.csv").write_text("person_id,team\n1,a\n2,b\n3,a\n")
+    rows = "".join(f"{i},{(i % 3) + 1},{'xy'[i % 2]},2026-01-{(i % 28) + 1:02d},{i * 2},{i * 4 + 1}\n" for i in range(1, 41))
+    (tmp / "jobs.csv").write_text("job_id,person_id,kind,day,hours,cost\n" + rows)
+    call(tools.attach, path=str(tmp / "people.csv"))
+    call(tools.attach, path=str(tmp / "jobs.csv"))
+    p = call(tools.profile, dataset="jobs")
+    assert p["roles"] == {"dimensions": ["kind"], "metrics": ["hours", "cost"], "time": ["day"]}, p["roles"]
+    assert p["correlations"] == [["hours", "cost", 1.0]], p.get("correlations")
+    assert p["join_keys"] == [{"column": "person_id", "with": "people.person_id", "match_pct": 100.0}], p.get("join_keys")
+    shape = store.get_json(db, "shape:jobs")
+    assert learning.better_question([], shape).startswith("hours and cost move together")
+    assert learning.better_question([], {"roles": p["roles"]}) == "Try: hours by kind per month of day. Which group grows fastest?"
+    assert learning.better_question([{"issue": "duplicate rows", "rows": 2}], shape).startswith("2 rows are exact copies")
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -478,6 +495,7 @@ def main():
     test_audit(tmp, db)
     test_metrics(tmp, db)
     test_drivers(tmp, db)
+    test_relations(tmp, db)
     print("selftest passed")
 
 

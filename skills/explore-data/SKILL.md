@@ -1,7 +1,7 @@
 ---
 name: explore-data
 description: "Answer questions about CSV, JSON, Parquet or SQLite files with Grimoire, so every number comes from a query."
-version: 0.7.0
+version: 0.12.0
 license: MIT
 metadata:
   hermes:
@@ -56,6 +56,15 @@ If the user keeps asking for the same calculation, suggest saving it: `/grimoire
 - Big files: `approx_count_distinct(x)` and `approx_quantile(x, 0.5)` are faster; say the result is approximate.
 - Joins across attached files work: `FROM orders o JOIN customers c USING (customer_id)`.
 - Several columns at once: `SELECT max(COLUMNS('amount|units')) FROM t`.
+- Remove duplicates: `SELECT DISTINCT * FROM t`, or keep the latest per key with `QUALIFY row_number() OVER (PARTITION BY id ORDER BY updated_at DESC) = 1`.
+- Cohort retention: first month per customer `min(date_trunc('month', d)) OVER (PARTITION BY customer_id)`, then count distinct customers per (cohort month, months since cohort) with `datediff('month', cohort, date_trunc('month', d))`.
+- Funnel: one row per user with `max(step = 'view')::INT AS viewed, max(step = 'cart')::INT AS carted, ...` grouped by user, then `sum()` each step and divide by the first step.
+
+## Shape of the data
+
+`grimoire_profile` also returns `roles` (dimensions, metrics, time columns), strong `correlations` between metrics, and `join_keys` to other attached files with the share of values that match.
+Use them to pick what to group by, and to join files on the right column.
+A correlation is not a cause; say so when you mention one.
 
 ## Merging values
 

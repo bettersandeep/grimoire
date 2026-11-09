@@ -138,8 +138,8 @@ def concept(sql, seen=()):
     return (fresh or hits or [None])[0]
 
 
-def better_question(issues):
-    """One question the data raises, from saved profile issues, or None."""
+def better_question(issues, shape=None):
+    """One question the data raises: from profile issues first, then from correlations and column roles."""
     for issue in issues or []:
         if issue.get("issue") == "duplicate rows":
             return (f"{issue['rows']:,} rows are exact copies of other rows. Are they real repeat orders, "
@@ -157,16 +157,23 @@ def better_question(issues):
         if issue.get("issue", "").startswith("text column"):
             ex = ", ".join(map(str, issue.get("examples") or []))
             return f"{issue['column']} has values that are not numbers ({ex}). Should those rows count?"
+    shape = shape or {}
+    for a, b, r in shape.get("correlations") or []:
+        return f"{a} and {b} move together (r = {r}). Does one drive the other, or does a third thing drive both?"
+    role = shape.get("roles") or {}
+    if role.get("metrics") and role.get("dimensions"):
+        per = f" per month of {role['time'][0]}" if role.get("time") else ""
+        return f"Try: {role['metrics'][0]} by {role['dimensions'][0]}{per}. Which group grows fastest?"
     return None
 
 
-def card(sql, qid, issues=None, seen=()):
+def card(sql, qid, issues=None, seen=(), shape=None):
     """(card text, concept key) for a teach-me card, or ("", None)."""
     lesson = concept(sql, seen)
     lines = []
     if lesson:
         lines.append(f"Learn: {lesson[1]}")
-    better = better_question(issues)
+    better = better_question(issues, shape)
     if better:
         lines.append(f"Ask next: {better}")
     if not lines:

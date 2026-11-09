@@ -12,6 +12,7 @@ from . import engine
 from . import guard
 from . import learning
 from . import metrics
+from . import relations
 from . import store
 from . import verify
 
@@ -159,11 +160,12 @@ def check_reply(text, session_id=None):
     if learn and qid:
         q = store.get_query(db, qid)
         if q:
-            issues = []
+            issues, shape = [], {}
             for name in q["datasets"]:
                 issues += store.get_json(db, f"issues:{name}", [])
+                shape = shape or store.get_json(db, f"shape:{name}", {})
             seen = store.get_json(db, "seen_concepts", [])
-            card, key_ = learning.card(q["sql"], q["id"], issues, seen)
+            card, key_ = learning.card(q["sql"], q["id"], issues, seen, shape)
             if card:
                 out += card
                 if key_:
@@ -315,6 +317,16 @@ def profile(args, session_id=None, **kwargs):
         remember(session_id, [row[2:] for row in compact])
         remember(session_id, issues)
         result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
+        role = relations.roles(rows)
+        if any(role.values()):
+            result["roles"] = role
+        corr = relations.correlations(eng, source, role["metrics"])
+        if corr:
+            result["correlations"] = corr
+        joins = relations.join_keys(eng, dataset, _sql_ref(ref), [r["column_name"] for r in rows])
+        if joins:
+            result["join_keys"] = joins
+        store.set_json(db, f"shape:{dataset}", {"roles": role, "correlations": corr})
         if source == "grimoire_sample":
             result["sampled"] = (f"The table is large, so this profile describes a random sample of "
                                  f"{engine.SAMPLE_ROWS:,} rows. Use grimoire_query for exact counts.")

@@ -56,6 +56,7 @@ DuckDB runs these queries in 40 to 60 ms.
 | Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (an incomplete last month, an average of averages, a join that counts rows twice) and a verdict: ready to share, share with caveats, or needs revision |
 | Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, spelling variants ('North' and 'north ') |
 | Column statistics | Quantiles, outliers, top values, rows per month |
+| Shape of the data | Which columns are dimensions, metrics and time; metrics that move together; ID columns that join to other attached files, with the share that matches |
 | Explains changes | "Why did revenue drop in March?": the total change split by each category column, with each segment's share |
 | Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL |
 | Remembers | Files, column notes and merge rules across sessions |
