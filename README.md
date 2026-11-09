@@ -100,6 +100,7 @@ Type these in any Hermes chat. They run plugin code only, so they cost no tokens
 | `/grimoire define revenue = sum(amount_cents) / 100` | Save a metric; answers then compute "revenue" the same way every time |
 | `/grimoire metrics` / `undefine <name>` | List or remove saved metrics |
 | `/grimoire learn on` / `off` | Learning mode |
+| `/grimoire learn plain` / `sql` | Lesson style: plain-words steps (default) or one SQL idea |
 | `/grimoire learn predict on` / `off` | Guess the answer before you see it |
 | `/grimoire rejects` | Malformed lines that were skipped |
 | `/grimoire merges` | Merge rules, applied and waiting |
