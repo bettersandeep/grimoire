@@ -172,6 +172,9 @@ class Engine:
         if is_many(expanded):
             return self._attach_many(expanded, name, merges, allow_private)
         real = os.path.realpath(expanded)
+        folder = guard.private_folder(real)  # before any file test: the answer must not say whether it exists
+        if folder and not allow_private:
+            raise EngineError(guard.private_error(folder))
         try:
             os.stat(real)
         except PermissionError as exc:
@@ -183,9 +186,6 @@ class Engine:
             pass
         if not os.path.isfile(real):
             raise EngineError(f"File not found: {path}")
-        folder = guard.private_folder(real)
-        if folder and not allow_private:
-            raise EngineError(guard.private_error(folder))
         if not os.access(real, os.R_OK):
             raise EngineError(f"No permission to read {path}.")
         kind = kind_of(real)
