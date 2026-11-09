@@ -1,20 +1,24 @@
-"""Tool schemas: what the model reads to decide when and how to call each tool."""
+"""Tool schemas: what the model reads to decide when and how to call each tool.
+
+Kept short on purpose: with `hermes chat -t grimoire` every schema is sent on every model call.
+The first sentence of each description is what Hermes Tool Search lists (80 characters at most).
+Longer guidance lives in the skill (skills/explore-data/SKILL.md), which the model reads only when needed.
+"""
+
+_DATASET = {"type": "string", "description": "Dataset name from grimoire_attach."}
+_TABLE = {"type": "string", "description": "Only for SQLite files with several tables."}
 
 ATTACH = {
     "name": "grimoire_attach",
     "description": (
         "Open a CSV, TSV, Parquet or SQLite file for SQL questions; never read it raw. "
-        "Also JSON and NDJSON, and .gz or .zst compressed CSV and JSON. "
-        "Returns the dataset name, its tables, columns, row counts, malformed lines it skipped "
-        "and saved merges. "
-        "Use this before answering any question about the contents of a data file. "
-        "Never read data files into the conversation; attach and query them instead."
+        "Also JSON, NDJSON, .gz/.zst, a folder or a glob. Returns tables, columns, row counts."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path to the file, for example ~/Downloads/sales.csv"},
-            "name": {"type": "string", "description": "Optional short dataset name. Defaults to the file name."},
+            "path": {"type": "string"},
+            "name": {"type": "string", "description": "Optional dataset name."},
         },
         "required": ["path"],
     },
@@ -24,16 +28,14 @@ PROFILE = {
     "name": "grimoire_profile",
     "description": (
         "Profile a data table: column types, empty values, distinct counts, ranges. "
-        "Also lists data problems: empty values, numbers or dates stored as text, and spelling variants "
-        "of one value. Use it before writing queries, and ask the user about the problems it finds."
+        "Also data problems, column roles, correlations, join keys. Ask the user about problems."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "dataset": {"type": "string", "description": "Dataset name from grimoire_attach."},
-            "table": {"type": "string", "description": "Table reference. Optional for CSV and Parquet (one table)."},
-            "column": {"type": "string", "description": "Optional: one column for detailed statistics (quantiles, "
-                       "outliers, top values, or rows per month for dates)."},
+            "dataset": _DATASET,
+            "table": _TABLE,
+            "column": {"type": "string", "description": "One column in depth: quantiles, outliers, top values."},
         },
         "required": ["dataset"],
     },
@@ -43,34 +45,48 @@ QUERY = {
     "name": "grimoire_query",
     "description": (
         "Answer questions about attached data files with one read-only SQL query. "
-        "Uses DuckDB. Returns a query id (like q7), the columns and up to 200 rows. "
-        "Compute every number you will state (totals, averages, growth, shares, differences) in SQL, "
-        "so each number in your answer appears in a query result. "
-        "Cite the query id next to the numbers it supports, for example 'Revenue grew 14.2% [q7]'. "
-        "Aggregate in SQL; do not fetch raw rows to count or sum them yourself. "
-        "Use saved metrics by name, like revenue(), when the context lists them."
+        "DuckDB; returns an id like q7 and up to 200 rows. Compute every number you state in SQL "
+        "and cite the id, like 'grew 14.2% [q7]'. Use saved metrics by name, like revenue()."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "sql": {"type": "string", "description": "One DuckDB SELECT / WITH / FROM / DESCRIBE / SUMMARIZE statement."},
-            "purpose": {"type": "string", "description": "One short line: what this query answers."},
+            "sql": {"type": "string", "description": "One SELECT."},
+            "purpose": {"type": "string", "description": "What it answers, in a few words."},
         },
         "required": ["sql"],
     },
 }
 
-NOTE = {
-    "name": "grimoire_note",
+DRIVERS = {
+    "name": "grimoire_drivers",
     "description": (
-        "Save what a data column means (unit, code, caveat) for later sessions. "
-        "Example: column 'amount', note 'in cents, integer'."
+        "Explain what drives a change between two periods, split by category columns. "
+        "Returns the total change and the segments that moved most, as a citable query id."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "dataset": {"type": "string"},
-            "column": {"type": "string", "description": "Column name, or table.column for SQLite datasets."},
+            "dataset": _DATASET,
+            "measure": {"type": "string", "description": "SQL aggregate or saved metric; default count(*)."},
+            "time_column": {"type": "string"},
+            "before": {"type": "string", "description": "2026, 2026-02 or 2026-02-15."},
+            "after": {"type": "string"},
+            "dimensions": {"type": "array", "items": {"type": "string"}, "description": "Optional columns to split by."},
+            "table": _TABLE,
+        },
+        "required": ["dataset", "time_column", "before", "after"],
+    },
+}
+
+NOTE = {
+    "name": "grimoire_note",
+    "description": "Save what a data column means (unit, code, caveat) for later sessions.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "dataset": _DATASET,
+            "column": {"type": "string", "description": "Column, or table.column for SQLite."},
             "note": {"type": "string"},
         },
         "required": ["dataset", "column", "note"],
@@ -81,52 +97,24 @@ MERGE = {
     "name": "grimoire_merge",
     "description": (
         "Propose merging spelling variants of a value, like 'north ' into 'North'. "
-        "The user must approve it with /grimoire merges approve before it applies; tell them so. "
-        "Once approved, it applies to all later queries and sessions, and does not change the file."
+        "It applies only after the user types /grimoire merges approve; tell them."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "dataset": {"type": "string", "description": "Dataset name from grimoire_attach."},
-            "column": {"type": "string", "description": "A text column."},
-            "values": {"type": "array", "items": {"type": "string"}, "description": "The exact values to replace."},
-            "into": {"type": "string", "description": "The value to use instead."},
-            "table": {"type": "string", "description": "Table reference. Optional for CSV, JSON and Parquet."},
+            "dataset": _DATASET,
+            "column": {"type": "string"},
+            "values": {"type": "array", "items": {"type": "string"}},
+            "into": {"type": "string"},
+            "table": _TABLE,
         },
         "required": ["dataset", "column", "values", "into"],
     },
 }
 
-DRIVERS = {
-    "name": "grimoire_drivers",
-    "description": (
-        "Explain what drives a change between two periods, split by category columns. "
-        "Use it for questions like 'why did revenue drop in March?'. Returns the total change and the "
-        "segments (for example region = North) that moved most, with their share of the change, as a "
-        "query id you can cite."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "dataset": {"type": "string", "description": "Dataset name from grimoire_attach."},
-            "measure": {"type": "string", "description": "An SQL aggregate, like sum(amount_paise) / 100, or a saved metric like revenue(). Default count(*)."},
-            "time_column": {"type": "string", "description": "The date or timestamp column."},
-            "before": {"type": "string", "description": "Earlier period: 2026, 2026-02 or 2026-02-15."},
-            "after": {"type": "string", "description": "Later period, same form."},
-            "dimensions": {"type": "array", "items": {"type": "string"}, "description": "Optional columns to split by. Default: text columns with 2 to 50 values."},
-            "table": {"type": "string", "description": "Table reference. Optional for CSV, JSON and Parquet."},
-            "purpose": {"type": "string", "description": "One short line: what this answers."},
-        },
-        "required": ["dataset", "time_column", "before", "after"],
-    },
-}
-
 CATALOG = {
     "name": "grimoire_catalog",
-    "description": (
-        "List data files, column notes and queries saved from earlier sessions. "
-        "Call this first when the user refers to data they used before."
-    ),
+    "description": "List data files, column notes and queries saved from earlier sessions.",
     "parameters": {"type": "object", "properties": {}},
 }
 
