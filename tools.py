@@ -35,6 +35,10 @@ _messages = OrderedDict()   # session -> the user's last message (for /grimoire 
 _last_qid = OrderedDict()   # session -> the last query id it ran
 _guesses = OrderedDict()    # session -> the user's prediction, waiting for the answer
 _last = {"session": None}
+_calls = OrderedDict()      # session -> (most tools, fewest tokens) one model call sent; numbers only
+
+# A chat with more tools than this runs full Hermes; a Grimoire-only bot sends about 10.
+LEAN_TOOLS = 15
 
 
 def _bucket(table, session_id):
@@ -104,6 +108,34 @@ def learning_state():
     return learn, learn and store.get_setting(db, "predict", "off") == "on"
 
 
+def remember_call(session_id, tool_count, tokens):
+    """Keep the size of each model call (from Hermes's pre_api_request hook) to show what a chat costs."""
+    if not isinstance(tool_count, int) or not isinstance(tokens, int) or tokens <= 0:
+        return
+    with _lock:
+        tools_, fewest = _calls.get(session_id or "", (0, tokens))
+        _put(_calls, session_id, (max(tools_, tool_count), min(fewest, tokens)))
+
+
+def call_size(session_id):
+    """(tools, tokens) of this chat's smallest model call, or None when Hermes did not report it."""
+    with _lock:
+        return _calls.get(session_id or "")
+
+
+def lean_tip(db, session_id):
+    """One-time tip, with this chat's real numbers, when it runs full Hermes. "" otherwise."""
+    size = call_size(session_id)
+    if not size or size[0] <= LEAN_TOOLS:
+        return ""
+    store.set_json(db, "call_size", {"tools": size[0], "tokens": size[1]})
+    if store.get_setting(db, "lean_tip", "") == "shown":
+        return ""
+    store.set_setting(db, "lean_tip", "shown")
+    return (f"\nTip: this chat sends {size[0]} tools and about {size[1]:,} tokens with every model call. "
+            "A Data bot with only Grimoire's tools sends about a fifth of that. How: /grimoire setup")
+
+
 def used_grimoire(session_id):
     with _lock:
         return (session_id or "") in _values
@@ -170,6 +202,10 @@ def check_reply(text, session_id=None):
                 out += card
                 if key_:
                     store.set_json(db, "seen_concepts", (seen + [key_])[-8:])
+    try:
+        out += lean_tip(db, session_id)
+    except Exception:
+        pass  # the tip is extra; never lose the check because of it
     return out
 
 

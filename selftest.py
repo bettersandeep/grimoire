@@ -354,6 +354,36 @@ def test_relations(tmp, db):
     assert learning.better_question([{"issue": "duplicate rows", "rows": 2}], shape).startswith("2 rows are exact copies")
 
 
+def test_lean_setup(tmp, db):
+    tools.setup(db=db, eng=None)
+    csv = tmp / "lean.csv"
+    csv.write_text("region,amount\nNorth,100\nSouth,250\n")
+    call(tools.attach, path=str(csv))
+    qid = call(tools.query, sql="SELECT sum(amount) AS total FROM lean")["id"]
+    reply = f"The total is 350 [{qid}]."
+    # no numbers from Hermes (or bad ones): no tip, no status line
+    tools.remember_call("lean", None, "11000")
+    assert "Tip:" not in tools.check_reply(reply, "lean")
+    assert "This chat:" not in commands.run("", session_id="lean")
+    # a lean chat: status says so, no tip
+    tools.remember_call("lean", 9, 2100)
+    assert "Tip:" not in tools.check_reply(reply, "lean")
+    assert "9 tools, about 2,100 tokens per model call (lean setup)" in commands.run("", session_id="lean")
+    # full Hermes: the tip shows once, with the chat's smallest call, then never again
+    tools.remember_call("full", 31, 11800)
+    tools.remember_call("full", 31, 11200)
+    tools.remember_call("full", 31, 14000)
+    out = tools.check_reply(reply, "full")
+    assert "Tip: this chat sends 31 tools and about 11,200 tokens" in out and "/grimoire setup" in out, out
+    assert "Tip:" not in tools.check_reply(reply, "full")
+    assert "For fewer tokens: /grimoire setup" in commands.run("", session_id="full")
+    assert store.get_json(db, "call_size", {}) == {"tools": 31, "tokens": 11200}
+    text = commands.run("setup")
+    assert "New Agent" in text and "Grimoire never changes your settings" in text and "—" not in text
+    # a chat that did not use Grimoire gets nothing
+    assert tools.check_reply("Hello 42.", "other") == ""
+
+
 def test_security(tmp, db):
     tools.setup(db=db, eng=None)
     lite = tmp / "sec.db"
@@ -500,6 +530,7 @@ def main():
     test_metrics(tmp, db)
     test_drivers(tmp, db)
     test_relations(tmp, db)
+    test_lean_setup(tmp, db)
     print("selftest passed")
 
 

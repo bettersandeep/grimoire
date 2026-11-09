@@ -1,5 +1,5 @@
 name: grimoire
-version: "0.12.2"
+version: "0.13.0"
 description: "Learn and explore your data with fewer tokens: ask questions about CSV, JSON, Parquet and SQLite files, and every number in the answer comes from a real query."
 author: Sandeep Singh
 requires_hermes: ">=0.23.0"
@@ -15,4 +15,5 @@ provides_hooks:
   - pre_tool_call
   - pre_llm_call
   - post_tool_call
+  - pre_api_request
   - transform_llm_output

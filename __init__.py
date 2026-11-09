@@ -26,7 +26,7 @@ def register(ctx):
         )
 
     ctx.register_command("grimoire", commands.run, description="Grimoire status, query SQL, skipped lines and merges",
-                         args_hint="[sql q12 | rejects | merges | unmerge <dataset> <column>]")
+                         args_hint="[setup | sql q12 | report | learn on | merges]")
 
     tools.configure(allow_private_folders=ctx.get_config("allow_private_folders", default=False))
 
@@ -70,6 +70,12 @@ def register(ctx):
             tools.record_guess(session_id, result)
 
     ctx.register_hook("post_tool_call", after_tool)
+
+    # Only two numbers per model call (tool count, approximate input tokens), to show what a chat costs.
+    def before_api(session_id=None, tool_count=None, approx_input_tokens=None, **kwargs):
+        tools.remember_call(session_id, tool_count, approx_input_tokens)
+
+    ctx.register_hook("pre_api_request", before_api)
 
     ctx.register_skill("explore-data", Path(__file__).resolve().parent / "skills" / "explore-data" / "SKILL.md",
                        description="Answer questions about CSV, JSON, Parquet or SQLite files with Grimoire.")
