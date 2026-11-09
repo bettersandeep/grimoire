@@ -141,10 +141,42 @@ function Files({ datasets, act, filter, setFilter }) {
   ] }, d.name)) })
 }
 
+const TIME = /^\d{4}(-\d{2}(-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?)?)?$/
+export const isTime = (values) => {
+  const vals = values.filter((v) => v !== null && v !== undefined).map(String)
+  return vals.length >= 3 && vals.every((v) => TIME.test(v))
+}
+
+export function compact(v) {
+  for (const [size, unit] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]) if (Math.abs(v) >= size) return `${Number((v / size).toPrecision(3))}${unit}`
+  return `${Number(v.toPrecision(3))}`
+}
+
+function Line({ q, li, vi }) {
+  const rows = q.rows.filter((r) => isNum(r[vi]) && r[li] !== null).sort((a, b) => String(a[li]).localeCompare(String(b[li]))).slice(0, 120)
+  const vals = rows.map((r) => r[vi])
+  const lo = Math.min(0, ...vals), hi = Math.max(...vals) || 1
+  const marks = [lo, (lo + hi) / 2, hi]
+  const W = 560, H = 190, B = 22, L = 14 + 7 * Math.max(...marks.map((v) => compact(v).length))
+  const x = (i) => L + (W - L - 10) * (i / Math.max(1, rows.length - 1))
+  const y = (v) => 8 + (H - B - 8) * (1 - (v - lo) / (hi - lo || 1))
+  const every = Math.max(1, Math.floor(rows.length / 6))
+  return jsxs('svg', { className: 'gr-line', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${q.columns[vi]} over ${q.columns[li]}`, children: [
+    ...marks.map((v, i) => jsxs('g', { children: [
+      jsx('line', { x1: L, x2: W - 10, y1: y(v), y2: y(v), className: 'gr-grid' }),
+      jsx('text', { x: L - 6, y: y(v) + 4, textAnchor: 'end', className: 'gr-tick', children: compact(v) })
+    ] }, 'g' + i)),
+    jsx('polyline', { points: vals.map((v, i) => `${x(i)},${y(v)}`).join(' '), className: 'gr-path-line' }, 'p'),
+    ...rows.map((r, i) => jsx('circle', { cx: x(i), cy: y(r[vi]), r: 2.5, className: 'gr-dot', children: jsx('title', { children: `${r[li]}: ${fmt(r[vi])}` }) }, 'd' + i)),
+    ...rows.map((r, i) => (i % every === 0 ? jsx('text', { x: x(i), y: H - 5, textAnchor: 'middle', className: 'gr-tick', children: String(r[li]).slice(0, 10) }, 't' + i) : null))
+  ] })
+}
+
 function Bars({ q }) {
   const pick = chartColumns(q.columns, q.rows)
   if (!pick) return null
   const [li, vi] = pick
+  if (isTime(q.rows.map((r) => r[li]))) return jsx(Line, { q, li, vi })
   const rows = q.rows.filter((r) => isNum(r[vi])).slice(0, 25)
   const top = Math.max(...rows.map((r) => Math.abs(r[vi]))) || 1
   return jsx('div', { className: 'gr-bars', role: 'img', 'aria-label': `${q.columns[vi]} by ${q.columns[li]}`, children: rows.map((r, i) => jsxs('div', { className: 'gr-bar-row', children: [
@@ -288,6 +320,8 @@ const CSS = `
 .gr-bar-row{display:contents}.gr-bar-label{text-align:right;color:var(--ui-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}
 .gr-bar-track{height:12px}.gr-bar{display:block;height:100%;min-width:2px;border-radius:2px;background:var(--ui-accent)}
 .gr-bar-value{font-variant-numeric:tabular-nums;color:var(--ui-text-secondary);font-size:12px}
+.gr-line{width:100%;max-width:640px;margin:10px 0;display:block}.gr-path-line{fill:none;stroke:var(--ui-accent);stroke-width:2}
+.gr-dot{fill:var(--ui-accent)}.gr-grid{stroke:var(--ui-stroke-secondary)}.gr-tick{fill:var(--ui-text-tertiary);font-size:11px}
 .gr-table-wrap{overflow-x:auto;margin-top:8px}.gr-table{border-collapse:collapse;font-size:12px}
 .gr-table th,.gr-table td{padding:5px 10px;border-bottom:1px solid var(--ui-stroke-secondary);text-align:left;white-space:nowrap}
 .gr-table th{font-weight:500;color:var(--ui-text-secondary)}.gr-num{text-align:right!important;font-variant-numeric:tabular-nums}

@@ -2,6 +2,7 @@
 
 import datetime
 import html
+import re
 
 BAR = 28
 
@@ -20,6 +21,15 @@ def chart_columns(columns, rows):
         return None
     label = next((i for i in range(len(columns)) if i != value and not all(_numeric(r[i]) for r in rows)), 0)
     return label, value
+
+
+_TIME = re.compile(r"^\d{4}(-\d{2}(-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?)?)?$")
+
+
+def is_time(values):
+    """True when every label is a year, month, date or timestamp written in ISO form."""
+    vals = [str(v) for v in values if v is not None]
+    return len(vals) >= 3 and all(_TIME.match(v) for v in vals)
 
 
 def text_chart(q, limit=25):
@@ -48,11 +58,43 @@ def _fmt(v):
     return "" if v is None else str(v)
 
 
+def compact(v):
+    """Short axis label: 8.17M, 4.09K, 12."""
+    for size, unit in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(v) >= size:
+            return f"{v / size:.3g}{unit}"
+    return f"{v:.3g}"
+
+
+def _svg_line(q, li, vi):
+    rows = sorted((r for r in q["rows"] if _numeric(r[vi]) and r[li] is not None), key=lambda r: str(r[li]))[:120]
+    vals = [r[vi] for r in rows]
+    lo, hi = min(0, min(vals)), max(vals) or 1
+    marks = (lo, (lo + hi) / 2, hi)
+    w, h, bottom = 560, 200, 24
+    left = 14 + 7 * max(len(compact(v)) for v in marks)
+    x = lambda i: left + (w - left - 10) * (i / max(1, len(rows) - 1))
+    y = lambda v: 8 + (h - bottom - 8) * (1 - (v - lo) / ((hi - lo) or 1))
+    pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(vals))
+    every = max(1, len(rows) // 6)
+    ticks = "".join(f'<text x="{x(i):.1f}" y="{h - 6}" text-anchor="middle" class="lbl">{html.escape(str(r[li])[:10])}</text>'
+                    for i, r in enumerate(rows) if i % every == 0)
+    grid = "".join(f'<line x1="{left}" x2="{w - 10}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="grid"/>'
+                   f'<text x="{left - 6}" y="{y(v) + 4:.1f}" text-anchor="end" class="lbl">{html.escape(compact(v))}</text>'
+                   for v in marks)
+    dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="2.5" class="dot"><title>{html.escape(str(r[li]))}: '
+                   f'{html.escape(_fmt(v))}</title></circle>' for i, (r, v) in enumerate(zip(rows, vals)))
+    return (f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{html.escape(q["columns"][vi])} over '
+            f'{html.escape(q["columns"][li])}">{grid}<polyline points="{pts}" class="line"/>{dots}{ticks}</svg>')
+
+
 def _svg_bars(q):
     pick = chart_columns(q["columns"], q["rows"])
     if not pick:
         return ""
     li, vi = pick
+    if is_time([r[li] for r in q["rows"]]):
+        return _svg_line(q, li, vi)
     rows = [r for r in q["rows"] if _numeric(r[vi])][:25]
     top = max(abs(r[vi]) for r in rows) or 1
     h, bar_w = 22, 360
@@ -107,6 +149,7 @@ section{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 .q,.muted{color:var(--muted);font-size:.88rem;margin:4px 0}.kpis{display:flex;flex-wrap:wrap;gap:12px}
 .kpi{border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:140px}.kv{font-size:1.5rem;font-weight:650;font-variant-numeric:tabular-nums}.kl{color:var(--muted);font-size:.8rem}
 svg{width:100%;max-width:620px;margin:6px 0}.bar{fill:var(--accent)}.lbl,.val{fill:var(--fg);font-size:12px}
+.line{fill:none;stroke:var(--accent);stroke-width:2}.dot{fill:var(--accent)}.grid{stroke:var(--line);stroke-width:1}.lbl{fill:var(--muted)}
 .tw{overflow-x:auto}table{border-collapse:collapse;font-size:.88rem;margin-top:8px}th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line)}th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
 details{margin-top:10px}pre{background:var(--code);padding:10px;border-radius:6px;overflow-x:auto;font-size:.82rem}
 """
