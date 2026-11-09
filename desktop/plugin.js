@@ -1,12 +1,12 @@
 import { ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, host, queryClient, useQuery, useMutation, useValue } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'grimoire'
 let pluginCtx
 
 const PATHS = [/^\/summary$/, /^\/queries(\?dataset=[\w-]+)?$/, /^\/queries\/q\d+\/explain$/, /^\/settings$/,
-  /^\/merges\/(approve|reject)$/, /^\/datasets\/[\w-]+\/forget$/]
+  /^\/merges\/(approve|reject)$/, /^\/datasets\/[\w-]+\/(forget|check|columns)$/, /^\/charts$/]
 
 export function assertPath(path) {
   if (!PATHS.some((re) => re.test(path))) throw new Error('Unsupported Grimoire path')
@@ -30,10 +30,27 @@ async function request(path, options = {}) {
   return result
 }
 
-function useData(path) {
+function useData(path, live = true) {
   const profile = useValue(host.state.profile)
   const connectionId = useValue(host.state.connectionId)
-  return useQuery({ queryKey: [ID, profile, connectionId, path], queryFn: () => request(path), refetchInterval: 5000, retry: false })
+  return useQuery({ queryKey: [ID, profile, connectionId, path], queryFn: () => request(path), enabled: !!path,
+    refetchInterval: live ? 5000 : false, retry: false })
+}
+
+/** Check files that have no health score yet, one at a time, on the page's own engine (no model tokens). */
+function useAutoCheck(datasets) {
+  const tried = useRef(new Set())
+  const [checking, setChecking] = useState(new Set())
+  useEffect(() => {
+    const next = (datasets || []).find((d) => !d.health && !d.missing && !tried.current.has(d.name))
+    if (!next || checking.size) return
+    tried.current.add(next.name)
+    setChecking(new Set([next.name]))
+    request(`/datasets/${next.name}/check`, { method: 'POST', body: {}, timeoutMs: 120000 })
+      .catch(() => {})  // the chip stays "Not checked" and its tooltip says how to check from a chat
+      .finally(() => { setChecking(new Set()); queryClient.invalidateQueries({ queryKey: [ID] }) })
+  }, [datasets, checking])
+  return checking
 }
 
 function useAction() {
@@ -120,33 +137,16 @@ function Pending({ pending, act }) {
 function About({ show, act }) {
   if (!show) return null
   return jsxs('section', { className: 'gr-about', 'aria-label': 'What Grimoire does', children: [
-    jsxs('div', { className: 'gr-lean-text', children: [
+    jsxs('div', { className: 'gr-about-text', children: [
       jsx('b', { children: 'Ask questions about your data files, and check every number' }),
       jsx('p', { children: 'Name a CSV, JSON, Parquet or SQLite file in any chat. Grimoire answers with a real SQL query and checks each number in the reply against it. It reads your files where they are and never changes them.' }),
       jsxs('ul', { children: [
-        jsxs('li', { children: [jsx('b', { children: 'Files' }), ' are the files you named in chats, with problems Grimoire found in them.'] }),
-        jsxs('li', { children: [jsx('b', { children: 'Saved queries' }), ' are the answers: chart, table, the SQL, and how each answer was made.'] }),
+        jsxs('li', { children: [jsx('b', { children: 'Files' }), ' are the files you named in chats. Each gets a ', jsx('b', { children: 'Data health' }), ' score: how far you can trust its numbers. Click the score to see why.'] }),
+        jsxs('li', { children: [jsx('b', { children: 'Saved queries' }), ' are the answers: chart, table, the SQL, and how each answer was made. Click ', jsx('b', { children: 'New chart' }), ' to make your own.'] }),
         jsxs('li', { children: ['Try in a chat: ', jsx('code', { children: 'What is the total revenue per region in ~/Downloads/sales.csv?' })] })
       ] })
     ] }),
     jsx('button', { className: 'gr-btn gr-small', onClick: () => act.mutate({ path: '/settings', body: { hide_about: true } }), children: 'Got it' })
-  ] })
-}
-
-function LeanTip({ tip, act }) {
-  if (!tip) return null
-  return jsxs('section', { className: 'gr-lean', 'aria-label': 'Use fewer tokens', children: [
-    jsxs('div', { className: 'gr-lean-text', children: [
-      jsx('b', { children: 'Use about a fifth of the tokens with a Data bot' }),
-      jsx('p', { children: `Your data chats send ${fmt(tip.tools)} tools and about ${fmt(tip.tokens)} tokens with every model call. A bot with only Grimoire's tools sends about a fifth of that, and answers faster.` }),
-      jsxs('ol', { children: [
-        jsxs('li', { children: ['Open the ', jsx('b', { children: 'Bots' }), ' tab, click ', jsx('b', { children: '+' }), ', then ', jsx('b', { children: 'New bot' }), '. Name it data.'] }),
-        jsxs('li', { children: ['Click ', jsx('b', { children: 'Advanced' }), ' (below Description) and clone from the profile that has Grimoire.'] }),
-        jsxs('li', { children: ['Open ', jsx('b', { children: 'Capabilities' }), ', then ', jsx('b', { children: 'Tools' }), '. Scroll down to the ', jsx('b', { children: 'Build for Hermes' }), ' box and switch off the switch in it (all tools). Then search for and switch on ', jsx('b', { children: 'Grimoire' }), ' and ', jsx('b', { children: 'Clarifying Questions' }), '.'] }),
-        jsx('li', { children: "Click Create bot, then ask data questions in the data bot's chat. Your main agent keeps all its tools." })
-      ] })
-    ] }),
-    jsx('button', { className: 'gr-btn gr-small', onClick: () => act.mutate({ path: '/settings', body: { hide_lean_tip: true } }), children: 'Hide' })
   ] })
 }
 
@@ -176,16 +176,42 @@ function issueText(i) {
   return `${i.column}: ${i.issue}`
 }
 
-function Files({ datasets, act, filter, setFilter }) {
+const LEVELS = [[90, 'good', 'Good: no serious problems.'], [70, 'fair', 'Check the problems below before you share numbers from this file.'],
+  [-Infinity, 'poor', 'Fix or explain the problems below before you use numbers from this file.']]
+export const healthLevel = (score) => LEVELS.find(([min]) => score >= min)
+
+function HealthChip({ d, open, toggle, checking }) {
+  if (d.health) {
+    const [, level] = healthLevel(d.health.score)
+    return jsx('button', { className: 'gr-chip gr-health', 'data-level': level, 'aria-expanded': open, onClick: toggle,
+      title: 'What does this mean?', children: `Data health ${d.health.score}` })
+  }
+  if (d.missing) return null
+  return jsx('span', { className: 'gr-chip', title: checking ? 'Grimoire is looking for problems in this file. This uses no model tokens.' : `Could not check this file here. Ask in a chat: check the data quality of ${d.name}`,
+    children: checking ? 'Checking…' : 'Not checked' })
+}
+
+function HealthInfo({ health }) {
+  const [, , advice] = healthLevel(health.score)
+  return jsxs('div', { className: 'gr-health-info', children: [
+    jsxs('p', { children: [jsx('b', { children: `Data health ${health.score} of 100` }), ' shows how far you can trust the numbers in this file. 100 means Grimoire found no problems. ', advice] }),
+    health.off.length ? jsx('ul', { children: health.off.map((o) => {
+      const m = /^-(\d+) (.*)$/.exec(o)
+      const why = m ? m[2] + (/other problems?$/.test(m[2]) ? ', listed below' : '') : o
+      return jsx('li', { children: m ? `${m[1]} point${m[1] === '1' ? '' : 's'} off: ${why}` : o }, o)
+    }) }) : null
+  ] })
+}
+
+function Files({ datasets, act, filter, setFilter, checking }) {
   const [armed, setArmed] = useState(null)
+  const [info, setInfo] = useState(null)
   if (!datasets?.length) return jsx('p', { className: 'gr-empty', children: 'No data files yet. Name a CSV, JSON, Parquet or SQLite file in a chat, and it shows here.' })
   return jsx('div', { className: 'gr-files', children: datasets.map((d) => jsxs('article', { className: 'gr-file', 'aria-current': filter === d.name || undefined, children: [
     jsxs('div', { className: 'gr-file-top', children: [
       jsx('button', { className: 'gr-link', onClick: () => setFilter(filter === d.name ? null : d.name), title: 'Show only this file\'s queries', children: d.name }),
       jsx('span', { className: 'gr-chip', children: d.kind }),
-      d.health ? jsx('span', { className: 'gr-chip gr-health', 'data-level': d.health.score >= 90 ? 'good' : d.health.score >= 70 ? 'fair' : 'poor',
-        title: d.health.off.length ? `Health ${d.health.score}/100: ${d.health.off.join(', ')}` : 'No data problems found', children: `Health ${d.health.score}` })
-        : jsx('span', { className: 'gr-chip', title: `Large file, so not checked yet. Ask in a chat: check the data quality of ${d.name}`, children: 'Not checked' }),
+      jsx(HealthChip, { d, open: info === d.name, toggle: () => setInfo(info === d.name ? null : d.name), checking: checking.has(d.name) }),
       d.missing ? jsx('span', { className: 'gr-chip gr-warn', children: 'file missing' }) : null,
       jsx('button', { className: 'gr-btn gr-small gr-push', 'data-armed': armed === d.name || undefined,
         onClick: () => { if (armed === d.name) { setArmed(null); act.mutate({ path: `/datasets/${d.name}/forget` }) } else setArmed(d.name) },
@@ -195,6 +221,7 @@ function Files({ datasets, act, filter, setFilter }) {
     jsx('div', { className: 'gr-path', title: d.path, children: d.path }),
     jsx('div', { className: 'gr-meta', children: [d.rows != null ? `${fmt(d.rows)}\u00a0rows` : null, d.added_at ? `added from a chat ${ago(d.added_at)}` : null,
       `${d.queries || 0}\u00a0${d.queries === 1 ? 'query' : 'queries'}`].filter(Boolean).join(' · ') }),
+    d.health && info === d.name ? jsx(HealthInfo, { health: d.health }) : null,
     d.health && !d.issues?.length ? jsx('div', { className: 'gr-meta', children: 'No problems found.' }) : null,
     d.issues?.length ? jsx(IssueChips, { issues: d.issues }) : null,
     d.merges?.length ? jsx('div', { className: 'gr-meta', children: 'Merges: ' + d.merges.map((m) => `${m.column} '${m.from}' → '${m.to}'`).join(' · ') }) : null,
@@ -478,13 +505,12 @@ function Detail({ q }) {
   ] })
 }
 
-function Queries({ filter }) {
+function Queries({ filter, selected, setSelected }) {
   const data = useData(filter ? `/queries?dataset=${filter}` : '/queries')
-  const [selected, setSelected] = useState(null)
   if (data.isLoading) return jsx('p', { className: 'gr-muted gr-pad', children: 'Loading…' })
   if (data.error) return jsx('p', { className: 'gr-error gr-pad', children: errorText(data.error) })
   const list = data.data.queries || []
-  if (!list.length) return jsx('p', { className: 'gr-empty', children: 'No saved queries yet. Every answer about your data saves one here, with its SQL.' })
+  if (!list.length) return jsx('p', { className: 'gr-empty', children: 'No saved queries yet. Every answer about your data saves one here, with its SQL. Or click New chart.' })
   const current = list.find((q) => q.id === selected) || list[0]
   return jsxs('div', { className: 'gr-split', children: [
     jsx('nav', { className: 'gr-list', 'aria-label': 'Saved queries', children: list.map((q) => jsxs('button', { className: 'gr-item', 'aria-current': q.id === current.id || undefined, onClick: () => setSelected(q.id), children: [
@@ -495,10 +521,70 @@ function Queries({ filter }) {
   ] })
 }
 
+export const isId = (name) => /(^|_)id$/i.test(name)
+const MEASURE_OPTS = [['count', 'Count rows'], ['sum', 'Total of'], ['avg', 'Average of'], ['min', 'Smallest'], ['max', 'Largest']]
+
+function Field({ label, children }) {
+  return jsxs('label', { className: 'gr-field', children: [jsx('span', { children: label }), children] })
+}
+
+function Select({ value, onChange, options }) {
+  return jsx('select', { className: 'gr-select', value, onChange: (e) => onChange(e.target.value),
+    children: options.map(([v, label]) => jsx('option', { value: v, children: label }, v)) })
+}
+
+function NewChart({ datasets, onDone, onClose }) {
+  const files = datasets.filter((d) => !d.missing)
+  const [form, setForm] = useState({ dataset: files[0]?.name || '', table: '', group: '', bucket: 'month', measure: 'count', column: '', fcol: '', op: '=', value: '' })
+  const set = (patch) => setForm((f) => ({ ...f, ...patch }))
+  const meta = useData(form.dataset ? `/datasets/${form.dataset}/columns` : null, false)
+  const make = useMutation({
+    mutationFn: (body) => request('/charts', { method: 'POST', body, timeoutMs: 60000 }),
+    onSuccess: (r) => { queryClient.invalidateQueries({ queryKey: [ID] }); onDone(r.id) }
+  })
+  const tables = meta.data?.tables || []
+  const table = tables.find((t) => t.table === form.table) || tables[0]
+  const cols = table?.columns || []
+  const nums = cols.filter((c) => c.kind === 'number').sort((a, b) => isId(a.name) - isId(b.name))  // ids last: nobody totals them
+  const groupKind = cols.find((c) => c.name === form.group)?.kind
+  const column = nums.some((c) => c.name === form.column) ? form.column : nums[0]?.name || ''
+  const submit = (e) => {
+    e.preventDefault()
+    make.mutate({ dataset: form.dataset, table: table?.table, group: form.group || null, bucket: groupKind === 'time' ? form.bucket : null,
+      measure: form.measure, column: form.measure === 'count' ? null : column,
+      filter: form.fcol ? { column: form.fcol, op: form.op, value: form.value } : null })
+  }
+  const colOpts = cols.map((c) => [c.name, c.name])
+  return jsxs('form', { className: 'gr-builder', onSubmit: submit, 'aria-label': 'New chart', children: [
+    jsxs('div', { className: 'gr-fields', children: [
+      jsx(Field, { label: 'File', children: jsx(Select, { value: form.dataset, onChange: (v) => set({ dataset: v, table: '', group: '', column: '', fcol: '' }), options: files.map((d) => [d.name, d.name]) }) }),
+      tables.length > 1 ? jsx(Field, { label: 'Table', children: jsx(Select, { value: table.table, onChange: (v) => set({ table: v, group: '', column: '', fcol: '' }), options: tables.map((t) => [t.table, t.table]) }) }) : null,
+      jsx(Field, { label: 'Measure', children: jsx(Select, { value: form.measure, onChange: (v) => set({ measure: v }), options: nums.length ? MEASURE_OPTS : MEASURE_OPTS.slice(0, 1) }) }),
+      form.measure !== 'count' ? jsx(Field, { label: 'Of', children: jsx(Select, { value: column, onChange: (v) => set({ column: v }), options: nums.map((c) => [c.name, c.name]) }) }) : null,
+      jsx(Field, { label: 'Group by', children: jsx(Select, { value: form.group, onChange: (v) => set({ group: v }), options: [['', 'Nothing (one number)'], ...colOpts] }) }),
+      groupKind === 'time' ? jsx(Field, { label: 'Per', children: jsx(Select, { value: form.bucket, onChange: (v) => set({ bucket: v }), options: [['day', 'Day'], ['month', 'Month'], ['year', 'Year']] }) }) : null,
+      jsx(Field, { label: 'Only rows where', children: jsx(Select, { value: form.fcol, onChange: (v) => set({ fcol: v }), options: [['', 'All rows'], ...colOpts] }) }),
+      form.fcol ? jsx(Field, { label: 'Is', children: jsx(Select, { value: form.op, onChange: (v) => set({ op: v }), options: [['=', '='], ['!=', '≠'], ['>', '>'], ['<', '<'], ['>=', '≥'], ['<=', '≤']] }) }) : null,
+      form.fcol ? jsx(Field, { label: 'Value', children: jsx('input', { className: 'gr-select', value: form.value, onChange: (e) => set({ value: e.target.value }), required: true }) }) : null
+    ] }),
+    meta.error ? jsx('p', { className: 'gr-error', children: errorText(meta.error) }) : null,
+    make.error ? jsx('p', { className: 'gr-error', children: errorText(make.error) }) : null,
+    jsxs('div', { className: 'gr-actions', children: [
+      jsx('button', { className: 'gr-cta', type: 'submit', disabled: !table || make.isPending, children: make.isPending ? 'Making…' : 'Make chart' }),
+      jsx('button', { className: 'gr-btn', type: 'button', onClick: onClose, children: 'Cancel' }),
+      jsx('span', { className: 'gr-muted', children: 'Grimoire writes the SQL and saves it as a query. No model tokens.' })
+    ] })
+  ] })
+}
+
 function GrimoirePage() {
   const summary = useData('/summary')
   const act = useAction()
   const [filter, setFilter] = useState(null)
+  const [selected, setSelected] = useState(null)
+  const [building, setBuilding] = useState(false)
+  const checking = useAutoCheck(summary.data?.datasets)
+  const files = (summary.data?.datasets || []).filter((d) => !d.missing)
   return jsxs('div', { className: 'gr-page', children: [
     jsx('style', { children: CSS }),
     jsx(Header, { summary: summary.data, act }),
@@ -506,15 +592,16 @@ function GrimoirePage() {
     jsxs('main', { className: 'gr-body', children: [
       jsx(About, { show: summary.data?.about, act }),
       jsx(Pending, { pending: summary.data?.pending, act }),
-      jsx(LeanTip, { tip: summary.data?.lean_tip, act }),
-      jsxs('section', { children: [jsx('h3', { className: 'gr-h', children: 'Files' }), jsx(Files, { datasets: summary.data?.datasets, act, filter, setFilter })] }),
+      jsxs('section', { children: [jsx('h3', { className: 'gr-h', children: 'Files' }), jsx(Files, { datasets: summary.data?.datasets, act, filter, setFilter, checking })] }),
       summary.data?.metrics?.length ? jsxs('section', { children: [
         jsx('h3', { className: 'gr-h', children: 'Saved metrics' }),
         jsx('div', { className: 'gr-chips', children: summary.data.metrics.map((m) => jsxs('span', { className: 'gr-chip gr-metric', title: 'Remove with /grimoire undefine ' + m.name, children: [jsx('b', { children: `${m.name}()` }), ` = ${m.expression}`] }, m.name)) })
       ] }) : null,
       jsxs('section', { className: 'gr-grow', children: [
-        jsxs('h3', { className: 'gr-h', children: ['Saved queries', filter ? jsx('button', { className: 'gr-chip gr-filter', onClick: () => setFilter(null), children: `${filter} ×` }) : null] }),
-        jsx(Queries, { filter }, filter || 'all')
+        jsxs('h3', { className: 'gr-h', children: ['Saved queries', filter ? jsx('button', { className: 'gr-chip gr-filter', onClick: () => setFilter(null), children: `${filter} ×` }) : null,
+          files.length && !building ? jsx('button', { className: 'gr-btn gr-small gr-push', onClick: () => setBuilding(true), children: '+ New chart' }) : null] }),
+        building ? jsx(NewChart, { datasets: files, onClose: () => setBuilding(false), onDone: (id) => { setBuilding(false); setFilter(null); setSelected(id) } }) : null,
+        jsx(Queries, { filter, selected, setSelected }, filter || 'all')
       ] })
     ] })
   ] })
@@ -549,9 +636,15 @@ const CSS = `
 .gr-about{display:flex;gap:16px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid color-mix(in srgb,var(--s1) 35%,transparent);background:color-mix(in srgb,var(--s1) 6%,transparent)}
 .gr-about p{margin:4px 0 0;color:var(--ui-text-secondary)}.gr-about ul{margin:6px 0 0;padding-left:18px;color:var(--ui-text-secondary);display:flex;flex-direction:column;gap:2px}
 .gr-about b{font-weight:600}.gr-about li b{color:var(--foreground);font-weight:500}.gr-about code{font:12px var(--font-mono,ui-monospace,monospace);color:var(--foreground)}
-.gr-lean{display:flex;gap:16px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid var(--ui-stroke-secondary)}
-.gr-lean-text{flex:1;min-width:0}.gr-lean p{margin:4px 0 0;color:var(--ui-text-secondary)}.gr-lean ol{margin:6px 0 0;padding-left:20px;color:var(--ui-text-secondary);display:flex;flex-direction:column;gap:2px}
-.gr-lean ol b{color:var(--foreground);font-weight:500}
+.gr-about-text{flex:1;min-width:0}
+.gr-health{cursor:pointer}.gr-health:hover{background:color-mix(in srgb,currentColor 14%,transparent)}
+.gr-health-info{font-size:12px;color:var(--ui-text-secondary);padding:8px 10px;border-radius:6px;background:var(--chrome-action-hover)}
+.gr-health-info p{margin:0}.gr-health-info b{color:var(--foreground);font-weight:500}.gr-health-info ul{margin:4px 0 0;padding-left:18px}
+.gr-builder{display:flex;flex-direction:column;gap:10px;padding:12px 14px;margin-bottom:10px;border:1px solid var(--ui-stroke-secondary);border-radius:8px}
+.gr-fields{display:flex;flex-wrap:wrap;gap:10px 12px}.gr-field{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--ui-text-tertiary);min-width:0}
+.gr-select{font:inherit;font-size:12px;color:var(--foreground);background:var(--background);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:4px 8px;min-width:120px;max-width:220px}
+.gr-builder .gr-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.gr-builder .gr-muted{margin:0}
+.gr-cta:disabled{opacity:.6;cursor:default}
 .gr-pending-text{flex:1;min-width:0}.gr-pending ul{margin:4px 0 0;padding-left:18px;color:var(--ui-text-secondary)}.gr-actions{display:flex;gap:8px}
 .gr-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ui-stroke-secondary);border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer;color:var(--foreground);background:transparent}
 .gr-btn:hover{background:var(--chrome-action-hover)}.gr-small{padding:3px 9px;font-size:12px}.gr-btn[data-armed]{color:var(--ui-red,var(--foreground));border-color:currentColor}

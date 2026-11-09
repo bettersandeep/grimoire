@@ -129,22 +129,6 @@ def call_size(session_id):
     return size if size and all(size) else None
 
 
-def lean_tip(db, session_id):
-    """One-time tip, with this chat's real numbers, when it runs full Hermes. "" otherwise."""
-    size = call_size(session_id)
-    if not size:
-        return ""
-    if store.get_json(db, "call_size", {}) != {"tools": size[0], "tokens": size[1]}:
-        store.set_json(db, "call_size", {"tools": size[0], "tokens": size[1]})  # for the Desktop page
-    if size[0] <= LEAN_TOOLS:
-        return ""
-    if store.get_setting(db, "lean_tip", "") == "shown":
-        return ""
-    store.set_setting(db, "lean_tip", "shown")
-    return (f"\nTip: this chat sends {size[0]} tools and about {size[1]:,} tokens with every model call. "
-            "A Data bot with only Grimoire's tools sends about a fifth of that. How: /grimoire setup")
-
-
 def used_grimoire(session_id):
     with _lock:
         return (session_id or "") in _values
@@ -219,8 +203,8 @@ def check_reply(text, session_id=None):
                 if key_:
                     store.set_json(db, "seen_concepts", (seen + [key_])[-8:])
     try:
-        tip = lean_tip(db, session_id)
-        if not tip and not learn and store.get_setting(db, "learn_tip", "") != "shown":
+        tip = ""
+        if not learn and store.get_setting(db, "learn_tip", "") != "shown":
             store.set_setting(db, "learn_tip", "shown")
             tip = ("\nTip: to see how each answer was made, step by step, type /grimoire learn on "
                    "or switch on Learning mode on the Data page.")

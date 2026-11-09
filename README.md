@@ -32,7 +32,9 @@ Hermes asks before it installs the one dependency, `duckdb`.
 Needs Hermes 0.23.0 or later and Python 3.11 or later.
 Update with `hermes plugins update grimoire`.
 
-## Fastest setup: a Data bot
+## Optional: a Data bot for fewer tokens
+
+Grimoire works in any chat, with all your other tools. You do not need this.
 
 Most of the tokens in an answer are Hermes's own system prompt and tool list, sent with every model call (about 11,000 tokens, mostly cached).
 A Data bot loads only Grimoire's tools, so each call sends about a fifth of that.
@@ -52,9 +54,7 @@ Already made a bot? Open its menu, choose **Edit…**, then **Advanced** and **C
 
 In a terminal: `hermes chat -t grimoire,clarify`.
 
-You do not need to remember this.
-The first time a data answer comes from a chat with all of Hermes's tools, Grimoire adds one line with that chat's real numbers, for example "this chat sends 21 tools and about 13,138 tokens with every model call".
-`/grimoire setup` shows the steps again, `/grimoire` shows the numbers for the current chat, and the Desktop Data page shows the steps until you hide them.
+`/grimoire setup` shows the steps again, and `/grimoire` shows the numbers for the current chat.
 
 Same question, same free model, measured on 2026-11-09:
 
@@ -120,7 +120,11 @@ Grimoire adds a **Data** page to Hermes Desktop: your files with their size, hea
 Each query has tabs for Chart, Table, SQL and How it was made.
 You can switch the chart type (bars, columns, line, area, donut) and pick which number to show; hover a mark to see its value.
 Tables keep the same decimals in a column and show a bar behind each number.
-Small files (up to 1,000,000 rows) get a health check as soon as you name them.
+**New chart** makes your own chart without a model: pick a file, a measure (count, total, average, smallest, largest), what to group by (a column, or a date per day, month or year) and an optional filter.
+Grimoire writes the SQL, runs it and saves it as a query, so the chart can be checked like any answer.
+**Data health** is a score out of 100 for how far you can trust a file's numbers; click it to see every point taken off.
+Small files (up to 1,000,000 rows) are checked as soon as you name them, and the Data page checks larger ones when you open it.
+Checks and charts on the Data page run on your computer and use no model tokens.
 Like every Desktop plugin it starts off; turn it on under **Capabilities → Plugins**.
 
 ## Tools the model gets

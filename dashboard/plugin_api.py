@@ -2,13 +2,15 @@
 
 Hermes imports this file standalone and serves it at /api/plugins/grimoire. It loads the sibling
 store, learning and commands modules by path, and opens the profile's plugin database per request.
-It never opens DuckDB; the chat process applies merge and forget changes before its next query.
+Checks and charts made on the page run on the page's own locked, read-only DuckDB engine, so they
+never touch the chat's engine and cost no model tokens. The chat process applies merges and forgets.
 """
 
 import hashlib
 import importlib.util
 import re
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
@@ -35,7 +37,12 @@ def _load(name):
 store = _load("store")
 learning = _load("learning")
 report = _load("report")
+engine = _load("engine")
+builder = _load("builder")
+tools = _load("tools")
 router = APIRouter()
+_engines = {}  # dataset -> Engine with only that file; ponytail: kept for the process lifetime, few files per user
+_engine_lock = threading.Lock()
 
 
 def _db():
@@ -76,8 +83,6 @@ def summary():
             "issues": store.get_json(db, f"issues:{name}", []),
             "health": store.get_json(db, f"health:{name}", None),
         })
-    size = store.get_json(db, "call_size", {})
-    lean_tip = size if size.get("tools", 0) > store.LEAN_TOOLS and store.get_setting(db, "lean_card", "") != "hidden" else None
     pending = [{"dataset": d, "column": c, "from": a, "to": b} for d, _t, c, a, b in store.pending_merges(db)]
     return {
         "version": _version(), "learn": learn,
@@ -86,7 +91,7 @@ def summary():
         "predictions": store.get_json(db, "predictions", {"asked": 0, "close": 0}),
         "datasets": datasets, "pending": pending,
         "metrics": [{"name": n, "expression": e} for n, e in store.metrics(db).items()],
-        "lean_tip": lean_tip, "about": store.get_setting(db, "about_card", "") != "hidden",
+        "about": store.get_setting(db, "about_card", "") != "hidden",
     }
 
 
@@ -132,8 +137,6 @@ def settings(body: dict = Body(...)):
         store.set_setting(db, "learn_style", body["learn_style"])
     if body.get("hide_about"):
         store.set_setting(db, "about_card", "hidden")
-    if body.get("hide_lean_tip"):
-        store.set_setting(db, "lean_card", "hidden")
     if "predict" in body:
         if body["predict"] and store.get_setting(db, "learn", "off") != "on":
             raise HTTPException(400, "Turn on learning mode first.")
@@ -159,3 +162,66 @@ def forget(name: str):
     if not any(counts.values()):
         raise HTTPException(404, f"Nothing saved for {name}.")
     return summary()
+
+
+def _engine_for(db, name):
+    """The page's engine for one saved file, rebuilt when the file or its merges change."""
+    paths = {n: p for n, p, _k in store.datasets(db)}
+    if name not in paths:
+        raise HTTPException(404, f"No file named {name}.")
+    merges = store.merges(db, name)
+    eng = _engines.get(name)
+    if eng is None or eng.datasets[name][0] != paths[name] or not eng.fresh(name) or eng.merges(name) != merges:
+        eng = engine.Engine()
+        eng.attach(paths[name], name, merges=merges)
+        _engines[name] = eng
+    return eng
+
+
+@router.post("/datasets/{name}/check")
+def check(name: str):
+    """Find data problems and score the file's health; the page asks for this for files not checked yet."""
+    db = _db()
+    with _engine_lock:
+        try:
+            eng = _engine_for(db, name)
+            tables = eng.tables(name)
+            if len(tables) != 1:
+                raise HTTPException(400, f"{name} has {len(tables)} tables; ask in a chat to check one.")
+            tools._quality(db, eng, name, tables[0])
+        except engine.EngineError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return summary()
+
+
+@router.get("/datasets/{name}/columns")
+def columns(name: str):
+    db = _db()
+    with _engine_lock:
+        try:
+            eng = _engine_for(db, name)
+            return {"tables": [{"table": ref, "columns": [{"name": c, "type": t, "kind": builder.kind(t)}
+                                                          for c, t in eng.schema(tools._sql_ref(ref))]}
+                               for ref in eng.tables(name)]}
+        except engine.EngineError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/charts")
+def chart(body: dict = Body(...)):
+    """Build, run and save a chart query from the page's choices; returns its query id."""
+    db = _db()
+    name = str(body.get("dataset") or "")
+    with _engine_lock:
+        try:
+            eng = _engine_for(db, name)
+            refs = eng.tables(name)
+            ref = body.get("table") or refs[0]
+            if ref not in refs:
+                raise HTTPException(400, f"No table {ref} in {name}.")
+            table = tools._sql_ref(ref)
+            sql, purpose = builder.build(table, dict(eng.schema(table)), body)
+            cols, rows, truncated = eng.query(sql)
+        except (engine.EngineError, builder.BuildError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return {"id": store.save_query(db, "desktop", sql, purpose, cols, rows, truncated, datasets=[name])}

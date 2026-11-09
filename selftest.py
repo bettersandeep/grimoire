@@ -616,20 +616,51 @@ def test_lean_setup(tmp, db):
     tools.remember_call("lean", tokens=2100)
     assert "Tip:" not in tools.check_reply(reply, "lean")
     assert "9 tools, about 2,100 tokens per model call (lean setup)" in commands.run("", session_id="lean")
-    # full Hermes: the tip shows once, with the chat's smallest call, then never again
+    # full Hermes: no push to set up a bot (the normal chat is the default); /grimoire shows the numbers
     for tokens in (11800, 11200, 14000):
         tools.remember_call("full", tool_count=31)
         tools.remember_call("full", tokens=tokens)
-    out = tools.check_reply(reply, "full")
-    assert "Tip: this chat sends 31 tools and about 11,200 tokens" in out and "/grimoire setup" in out, out
     assert "Tip:" not in tools.check_reply(reply, "full")
-    assert "For fewer tokens: /grimoire setup" in commands.run("", session_id="full")
-    assert store.get_json(db, "call_size", {}) == {"tools": 31, "tokens": 11200}
+    assert "31 tools, about 11,200 tokens per model call. Optional, for fewer tokens: /grimoire setup" in commands.run("", session_id="full")
     text = commands.run("setup")
     assert "New bot" in text and "Capabilities, then Tools." in text and "Grimoire never changes your settings" in text
     assert "—" not in text
     # a chat that did not use Grimoire gets nothing
     assert tools.check_reply("Hello 42.", "other") == ""
+
+
+def test_builder(tmp, db):
+    """New chart on the Data page, and its health check: the page's own engine, no model."""
+    b, E = importlib.import_module(f"{HERE.name}.builder"), pkg.engine
+    (tmp / "shop.csv").write_text("day,region,amount\n2026-01-03,North,10\n2026-01-20,South,5\n2026-02-02,North,7\n2026-02-09,O'Hare,1\n")
+    eng = E.Engine()
+    eng.attach(str(tmp / "shop.csv"), "shop")
+    types = dict(eng.schema('"shop"'))
+    assert b.kind(types["day"]) == "time" and b.kind(types["amount"]) == "number" and b.kind(types["region"]) == "text"
+    sql, purpose = b.build('"shop"', types, {"group": "region", "measure": "sum", "column": "amount"})
+    assert eng.query(sql)[1] == [["North", 17], ["South", 5], ["O'Hare", 1]], sql
+    assert purpose == "Total amount per region (made on the Data page)"
+    sql, purpose = b.build('"shop"', types, {"group": "day", "bucket": "month", "measure": "count"})
+    assert eng.query(sql)[1] == [["2026-01", 2], ["2026-02", 2]] and purpose.startswith("Rows per month"), sql
+    sql, _ = b.build('"shop"', types, {"measure": "max", "column": "amount", "filter": {"column": "region", "op": "=", "value": "O'Hare"}})
+    assert eng.query(sql)[1] == [[1]], sql  # a quote in a value stays a value
+    sql, _ = b.build('"shop"', types, {"measure": "count", "filter": {"column": "amount", "op": ">", "value": "6"}})
+    assert eng.query(sql)[1] == [[2]], sql
+    for bad in ({"group": "nope"}, {"measure": "sum", "column": "region"}, {"measure": "drop"},
+                {"group": "region", "bucket": "month"}, {"filter": {"column": "amount", "op": ";", "value": "1"}},
+                {"filter": {"column": "amount", "op": "=", "value": ""}}):
+        try:
+            b.build('"shop"', types, bad)
+            raise AssertionError(bad)
+        except b.BuildError:
+            pass
+    # the page's health check: a separate engine, results saved for the page
+    (tmp / "regions2.csv").write_text("region,n\nNorth,1\nnorth ,2\nSouth,3\nSouth,3\n")
+    page = E.Engine()
+    page.attach(str(tmp / "regions2.csv"), "regions2")
+    score = tools._quality(db, page, "regions2", "regions2")[4]
+    assert store.get_json(db, "health:regions2") == score and score["score"] < 100, score
+    assert any(i["issue"] == "spelling variants of one value" for i in store.get_json(db, "issues:regions2"))
 
 
 def test_security(tmp, db):
@@ -781,6 +812,7 @@ def main():
     test_relations(tmp, db)
     test_profile_checks(tmp, db)
     test_lean_setup(tmp, db)
+    test_builder(tmp, db)
     test_recipes(tmp, db)
     test_glob_and_names(tmp, db)
     test_charts()

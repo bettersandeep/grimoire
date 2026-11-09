@@ -1,6 +1,7 @@
 """Durable state in the plugin's SQLite database: datasets, column profiles and notes, and queries."""
 
 import json
+import sqlite3
 import time
 
 # A chat that sends more tools than this runs full Hermes; a Grimoire-only bot sends fewer.
@@ -65,10 +66,14 @@ CREATE TABLE IF NOT EXISTS queries (
 def init(db):
     db.executescript(SCHEMA)
     cols = {row[1] for row in db.execute("PRAGMA table_info(queries)")}
-    if "datasets" not in cols:  # added in 0.4.1: which datasets a query read, so forget can delete it
-        db.execute("ALTER TABLE queries ADD COLUMN datasets TEXT")
-    if "question" not in cols:  # added in 0.5.0: the user's words, for /grimoire explain
-        db.execute("ALTER TABLE queries ADD COLUMN question TEXT")
+    # datasets (0.4.1): which files a query read, so forget can delete it; question (0.5.0): the user's words
+    for col in ("datasets", "question"):
+        if col not in cols:
+            try:
+                db.execute(f"ALTER TABLE queries ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError as exc:  # two page requests can migrate at the same time
+                if "duplicate column" not in str(exc):
+                    raise
     db.commit()
 
 

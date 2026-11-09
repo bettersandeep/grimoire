@@ -32,9 +32,10 @@ HELP = """Commands:
   /grimoire reset confirm            delete everything Grimoire saved"""
 
 
-SETUP = """Use fewer tokens: chat with a Data bot that has only Grimoire's tools.
-Full Hermes sends every tool (terminal, browser, web and more) with every model call.
-A bot with only Grimoire's tools sends about a fifth of that, and answers faster.
+SETUP = """Optional. Grimoire works in any chat; you do not need this.
+To use fewer tokens on data questions, chat with a Data bot that has only Grimoire's tools.
+Full Hermes sends every tool (terminal, browser, web and more) with every model call, mostly cached.
+A bot with only Grimoire's tools sends about a fifth of that.
 
 In Hermes Desktop:
   1. Open the Bots tab, click +, then New bot. Name it data.
@@ -156,7 +157,7 @@ def _status(db, eng, session_id=None):
     if size:
         lean = size[0] <= tools.LEAN_TOOLS
         lines.append(f"This chat: {size[0]} tools, about {size[1]:,} tokens per model call"
-                     + (" (lean setup)" if lean else ". For fewer tokens: /grimoire setup"))
+                     + (" (lean setup)" if lean else ". Optional, for fewer tokens: /grimoire setup"))
     return "\n".join(lines + ["", HELP])
 
 
