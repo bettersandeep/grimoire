@@ -90,8 +90,12 @@ function Header({ summary, act }) {
       jsxs('div', { children: [jsx('h1', { children: 'Data' }), jsx('p', { children: `Grimoire ${s.version || ''} · every number has a receipt` })] })
     ] }),
     jsxs('div', { className: 'gr-toggles', children: [
-      jsx(Toggle, { label: 'Learning mode', checked: s.learn, hint: 'A short SQL lesson and a better question after data answers',
+      jsx(Toggle, { label: 'Learning mode', checked: s.learn, hint: 'After data answers: how the answer was made, and a better question',
         onChange: (v) => act.mutate({ path: '/settings', body: { learn: v } }) }),
+      jsxs('div', { className: 'gr-seg', role: 'radiogroup', 'aria-label': 'Lesson style', 'data-disabled': !s.learn || undefined, children: [
+        ['plain', 'Plain words', 'Step by step, with the row count at each step'], ['sql', 'SQL', 'One SQL idea from each answer']
+      ].map(([v, label, hint]) => jsx('button', { role: 'radio', 'aria-checked': (s.learn_style || 'plain') === v, title: hint, disabled: !s.learn,
+        onClick: () => act.mutate({ path: '/settings', body: { learn_style: v } }), children: label }, v)) }),
       jsx(Toggle, { label: s.predict && p.asked ? `Predictions · ${p.close} of ${p.asked} close` : 'Predictions', checked: s.predict, disabled: !s.learn,
         hint: s.learn ? 'Guess the main number before you see it' : 'Turn on learning mode first',
         onChange: (v) => act.mutate({ path: '/settings', body: { predict: v } }) })
@@ -377,6 +381,10 @@ const CSS = `
 .gr-brand{display:flex;align-items:center;gap:10px;min-width:0}.gr-brand h1{margin:0;font-size:16px;font-weight:600}.gr-brand p{margin:1px 0 0;font-size:12px;color:var(--ui-text-tertiary)}
 .gr-mark{width:32px;height:32px;flex:none;border-radius:8px;overflow:hidden}
 .gr-toggles{margin-left:auto;display:flex;gap:16px;flex-wrap:wrap}
+.gr-seg{display:inline-flex;border:1px solid var(--ui-stroke-secondary);border-radius:7px;overflow:hidden}.gr-seg[data-disabled]{opacity:.5}
+.gr-seg button{border:0;background:transparent;color:var(--ui-text-secondary);font:inherit;font-size:12px;padding:4px 10px;cursor:pointer}
+.gr-seg button+button{border-left:1px solid var(--ui-stroke-secondary)}.gr-seg button[aria-checked=true]{background:color-mix(in srgb,var(--ui-accent) 18%,transparent);color:var(--foreground)}
+.gr-seg button:disabled{cursor:default}.gr-seg button:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
 .gr-toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;color:var(--ui-text-secondary)}.gr-toggle[data-disabled]{opacity:.5;cursor:default}
 .gr-toggle input{position:absolute;opacity:0;width:1px;height:1px}
 .gr-switch{width:28px;height:16px;border-radius:8px;background:var(--ui-stroke-secondary);position:relative;transition:background .15s;flex:none}

@@ -162,6 +162,23 @@ def test_learning(tmp, db):
     # learning on: a card with one idea and one better question from the profile issues
     assert "Predictions are on" not in commands.run("learn predict on")  # needs learning first
     assert "on" in commands.run("learn on")
+    # plain words (the default): each step with its row count, and the result in context
+    out = tools.check_reply(reply, "test")
+    assert "how this answer was made" in out and "Learn:" not in out, out
+    assert "1. Started with 4 rows in orders" in out, out
+    assert "Made one group per region: 3 groups" in out, out
+    assert "For each group, worked out total: added up amount" in out and "Sorted from highest total" in out, out
+    assert "Result: 4 rows; first is South, total 250" in out or "Result: South, total 250" in out, out
+    assert "Ask next:" in out and f"/grimoire explain {qid}" in out, out
+    assert "(plain words)" in commands.run("")
+    text = commands.run(f"explain {qid}")
+    assert "In plain words:" in text and "GROUP BY region" in text, text
+    assert store.get_json(db, f"steps:{qid}", [])[0].startswith("1. Started with"), "saved for Desktop"
+    db.execute("INSERT INTO settings VALUES ('steps:q99999', '[]')")
+    store._prune_steps(db)
+    assert store.get_json(db, "steps:q99999", None) is None and store.get_json(db, f"steps:{qid}", None)
+    # SQL style: the existing lesson
+    assert "SQL idea" in commands.run("learn sql") and "(SQL)" in commands.run("")
     out = tools.check_reply(reply, "test")
     assert "Learning mode" in out and "Learn:" in out and f"/grimoire explain {qid}" in out, out
     assert "Ask next:" in out and "'North'" in out, out
@@ -178,7 +195,20 @@ def test_learning(tmp, db):
     assert "Off by 100%" in out and "1 of 2" in out, out
     assert "Predictions: on (1 of 2 guesses within 10%)" in commands.run("")
     commands.run("learn off")
+    commands.run("learn plain")
     assert "Learning mode" not in tools.check_reply(reply, "test")
+    # walkthrough pieces: a filter with counts, top-1 against the runner-up, a lone total
+    w = pkg.walkthrough
+    q1 = store.get_query(db, call(tools.query, sql="SELECT region, sum(amount) AS total FROM orders WHERE amount IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 1")["id"])
+    st = w.steps(q1, tools._get()[1])
+    assert "2. Kept rows where empty amount" not in st and any("left out 1" in x for x in st), st
+    assert st[-1].startswith("Result: South, total 250; ") and "% more than" in st[-1], st
+    q2 = store.get_query(db, call(tools.query, sql="SELECT count(*) AS n FROM orders")["id"])
+    assert w.steps(q2, tools._get()[1])[-1] == "Result: n 4", w.steps(q2, tools._get()[1])
+    assert w.describe("round(sum(amount_cents) / 100, 2) AS revenue") == "added up amount_cents, then divided by 100, then rounded to 2 decimals"
+    assert w.describe("region") is None and w._label("strftime(order_date, '%Y-%m') AS m") == "month of order_date"
+    cte = store.get_query(db, call(tools.query, sql="WITH t AS (SELECT * FROM orders) SELECT count(*) AS n FROM t")["id"])
+    assert w.steps(cte, tools._get()[1]) == ["Result: n 4"]  # too complex to retell: result only
     # clause splitter keeps subqueries and strings whole
     parts = learning.clauses("SELECT a FROM (SELECT * FROM t WHERE x = 'GROUP BY') s WHERE b > 1 ORDER BY a LIMIT 5")
     assert [p[0] for p in parts] == ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"], parts
