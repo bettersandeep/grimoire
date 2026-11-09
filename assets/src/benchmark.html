@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=JetBrains+Mono:wght@500;700&display=block" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1200px;height:600px;overflow:hidden;background:#0a0a0a;color:#eef0ff;font-family:-apple-system,sans-serif;position:relative;padding:48px 56px}
+.grid{position:absolute;inset:0;background-image:linear-gradient(#2a55ff1f 1px,transparent 1px),linear-gradient(90deg,#2a55ff1f 1px,transparent 1px);background-size:40px 40px}
+.k{position:relative;font:700 15px "Archivo Black";letter-spacing:6px;color:#f2f2f2}
+h2{position:relative;font:76px/1 "Anton";color:#ffd60a;letter-spacing:2px;margin:8px 0 6px}
+.sub{position:relative;font:500 15px "JetBrains Mono",monospace;color:#8ea0e6;margin-bottom:34px}
+.row{position:relative;display:grid;grid-template-columns:230px 1fr 250px;align-items:center;gap:18px;margin:16px 0}
+.lab{font:700 20px -apple-system,sans-serif}.lab span{display:block;font:500 13px "JetBrains Mono",monospace;color:#8ea0e6;margin-top:3px}
+.bar{height:44px;background:#2a55ff;border:1.5px solid #6f8bff;position:relative}
+.bar.hl{background:#ffd60a;border-color:#ffd60a}
+.val{font:28px "Anton";letter-spacing:1px}.val span{display:block;font:500 13px "JetBrains Mono",monospace;color:#8ea0e6;letter-spacing:0}
+.note{position:absolute;left:56px;bottom:30px;font:500 13px "JetBrains Mono",monospace;color:#8ea0e6}
+.credit{position:absolute;right:56px;bottom:30px;font:600 13px -apple-system,sans-serif;color:#f2f2f2;opacity:.85}
+</style></head><body><div class="grid"></div>
+<div class="k">GRIMOIRE BENCHMARK · REAL PUBLIC DATA</div>
+<h2>20.3M TAXI TRIPS, 6 QUESTIONS</h2>
+<div class="sub">NYC yellow taxi, Jan to Jun 2024, 6 Parquet files · same free model · all 18 answers correct</div>
+<div class="row"><div class="lab">Plain Hermes<span>terminal + Python</span></div><div><div class="bar" style="width:100%"></div></div><div class="val">123,437<span>tokens · 75 s · 10 calls</span></div></div>
+<div class="row"><div class="lab">Hermes + Grimoire<span>all Hermes tools</span></div><div><div class="bar" style="width:19.3%"></div></div><div class="val">23,866<span>tokens · 12 s · 1 call</span></div></div>
+<div class="row"><div class="lab">Data bot<span>Grimoire's tools only</span></div><div><div class="bar hl" style="width:4.1%"></div></div><div class="val">5,037<span>tokens · 12 s · 1 call</span></div></div>
+<div class="note">Median input tokens per answer. Raw results: bench/results-nyc.jsonl</div>
+<div class="credit">bettersandeep/grimoire</div>
+</body></html>

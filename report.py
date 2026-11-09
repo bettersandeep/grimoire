@@ -294,10 +294,12 @@ def _table(q, limit=50):
     nums = [bool(q["rows"]) and all(_numeric(r[i]) or r[i] is None for r in q["rows"]) for i in range(len(q["columns"]))]
     head = "".join(f'<th class="{"num" if n else ""}" aria-sort="none"><button type="button" data-num="{int(n)}">'
                    f'{html.escape(c)}</button></th>' for c, n in zip(q["columns"], nums))
+    whole = [n and all(v is None or float(v).is_integer() for v in (r[i] for r in q["rows"])) for i, n in enumerate(nums)]
+    show = lambda v, i: _fmt(int(v)) if whole[i] and isinstance(v, float) else _fmt(v)  # 5.0 buckets read as 5
     body = []
     for r in q["rows"][:limit]:
         cells = "".join(f'<td class="{"num" if _numeric(v) else ""}"' + (f' data-v="{v!r}"' if _numeric(v) else "")
-                        + f'>{html.escape(_fmt(v))}</td>' for v in r)
+                        + f'>{html.escape(show(v, i))}</td>' for i, v in enumerate(r))
         body.append(f"<tr>{cells}</tr>")
     more = (f'<p class="muted">{len(q["rows"]) - limit} more rows not shown.</p>'
             if len(q["rows"]) > limit else "")
@@ -334,12 +336,16 @@ def _files(files, metrics):
             + (f'<p class="muted">Saved metrics used</p><ul>{defs}</ul>' if defs else "") + "</section>")
 
 
+def _queries(n):
+    return f"{n} query" if n == 1 else f"{n} queries"
+
+
 def _toolbar(queries):
     names = sorted({n for q in queries for n in q["datasets"]})
     pick = ("" if len(names) < 2 else '<select id="file" aria-label="File"><option value="">All files</option>'
             + "".join(f'<option>{html.escape(n)}</option>' for n in names) + "</select>")
     return (f'<div class="bar-tools" role="search">{pick}<input id="find" type="search" placeholder="Filter queries" '
-            f'aria-label="Filter queries"><span id="count" class="muted" aria-live="polite">{len(queries)} queries</span></div>')
+            f'aria-label="Filter queries"><span id="count" class="muted" aria-live="polite">{_queries(len(queries))}</span></div>')
 
 
 def _section(q, caveats=()):
@@ -390,7 +396,7 @@ const q=[...document.querySelectorAll('section.query')],find=document.getElement
 count=document.getElementById('count');
 function filter(){const t=find.value.trim().toLowerCase(),f=file?file.value:'';let n=0;
 q.forEach(s=>{const ok=(!t||s.dataset.text.includes(t))&&(!f||s.dataset.files.split('|').includes(f));s.hidden=!ok;n+=ok});
-count.textContent=n===q.length?q.length+' queries':n+' of '+q.length+' queries'}
+const w=k=>k===1?' query':' queries';count.textContent=n===q.length?q.length+w(q.length):n+' of '+q.length+w(q.length)}
 find.addEventListener('input',filter);if(file)file.addEventListener('change',filter);
 document.querySelectorAll('th button').forEach(b=>b.addEventListener('click',()=>{const th=b.parentElement,
 tr=th.parentElement,i=[...tr.children].indexOf(th),body=th.closest('table').tBodies[0],
