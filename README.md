@@ -185,4 +185,4 @@ MIT license.
 
 ## Credits
 
-The icon and banner use a public-domain engraving of Hermes Trismegistus by Jean-Louis Durant (1675); see [assets/CREDITS.md](assets/CREDITS.md).
+The icon and banner use Howard Pyle's public-domain drawing "The Enchanter Merlin" (1903); see [assets/CREDITS.md](assets/CREDITS.md).

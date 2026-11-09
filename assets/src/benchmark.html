@@ -1,18 +1,18 @@
 <!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="fonts.css"><style>
 *{box-sizing:border-box;margin:0}
-body{width:1200px;height:600px;overflow:hidden;position:relative;background:radial-gradient(900px 520px at 30% 40%,var(--paper),var(--paper2) 85%);color:var(--ink);font-family:"Geist",sans-serif;padding:56px 72px}
-.tex{position:absolute;inset:0;opacity:.3;mix-blend-mode:multiply}
-.k{position:relative;font:600 13px "Geist Mono",monospace;letter-spacing:3.5px;text-transform:uppercase;color:var(--teal)}
+body{width:1200px;height:600px;overflow:hidden;position:relative;background:radial-gradient(900px 600px at 70% 30%,#22164a,#120c26 50%,#0c0816 85%);color:#f4ead2;font-family:"Geist",sans-serif;padding:56px 72px}
+.tex{position:absolute;inset:0;opacity:.25;mix-blend-mode:overlay}
+.k{position:relative;font:600 13px "Geist Mono",monospace;letter-spacing:3.5px;text-transform:uppercase;color:#43e0c0}
 h2{position:relative;font:600 60px/1.05 "Geist Serif",serif;letter-spacing:-1.5px;margin:12px 0 10px}
-.sub{position:relative;font:400 15px "Geist Mono",monospace;color:var(--ink2);margin-bottom:40px}
+.sub{position:relative;font:400 15px "Geist Mono",monospace;color:#a99fcc;margin-bottom:40px}
 .row{position:relative;display:grid;grid-template-columns:230px 1fr 260px;align-items:center;gap:22px;margin:20px 0}
-.lab{font:600 20px "Geist",sans-serif}.lab span{display:block;font:400 13px "Geist Mono",monospace;color:var(--ink2);margin-top:3px}
-.bar{height:40px;background:#16211f1a;border-radius:3px;position:relative}
-.bar i{position:absolute;inset:0 auto 0 0;background:var(--ink2);border-radius:3px}
-.bar i.hl{background:var(--teal)}
-.val{font:600 30px "Geist Serif",serif}.val span{display:block;font:400 13px "Geist Mono",monospace;color:var(--ink2)}
-.note{position:absolute;left:72px;bottom:34px;font:400 13px "Geist Mono",monospace;color:var(--ink2)}
-.credit{position:absolute;right:72px;bottom:34px;font:400 13px "Geist Mono",monospace;color:var(--ink2)}
+.lab{font:600 20px "Geist",sans-serif}.lab span{display:block;font:400 13px "Geist Mono",monospace;color:#a99fcc;margin-top:3px}
+.bar{height:40px;background:#ffffff12;border-radius:3px;position:relative}
+.bar i{position:absolute;inset:0 auto 0 0;background:#7c5cff;border-radius:3px}
+.bar i.hl{background:#43e0c0}
+.val{font:600 30px "Geist Serif",serif}.val span{display:block;font:400 13px "Geist Mono",monospace;color:#a99fcc}
+.note{position:absolute;left:72px;bottom:34px;font:400 13px "Geist Mono",monospace;color:#a99fcc}
+.credit{position:absolute;right:72px;bottom:34px;font:400 13px "Geist Mono",monospace;color:#a99fcc}
 </style></head><body>
 <svg class="tex" width="1200" height="600"><filter id="p"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="3" seed="11"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#p)"/></svg>
 <div class="k">Grimoire benchmark · real public data</div>
@@ -20,7 +20,7 @@ h2{position:relative;font:600 60px/1.05 "Geist Serif",serif;letter-spacing:-1.5p
 <div class="sub">NYC yellow taxi, Jan to Jun 2024, 6 Parquet files · same free model · all 18 answers correct</div>
 <div class="row"><div class="lab">Plain Hermes<span>terminal + Python</span></div><div class="bar"><i style="width:100%"></i></div><div class="val">123,437<span>tokens · 75 s · 10 calls</span></div></div>
 <div class="row"><div class="lab">Hermes + Grimoire<span>all Hermes tools</span></div><div class="bar"><i style="width:19.3%"></i></div><div class="val">23,866<span>tokens · 12 s · 1 call</span></div></div>
-<div class="row"><div class="lab">Data bot<span>Grimoire's tools only</span></div><div class="bar"><i class="hl" style="width:4.1%"></i></div><div class="val" style="color:var(--teal)">5,037<span>tokens · 12 s · 1 call</span></div></div>
+<div class="row"><div class="lab">Data bot<span>Grimoire's tools only</span></div><div class="bar"><i class="hl" style="width:4.1%"></i></div><div class="val" style="color:#43e0c0">5,037<span>tokens · 12 s · 1 call</span></div></div>
 <div class="note">Median input tokens per answer. Raw results: bench/results-nyc.jsonl</div>
 <div class="credit">github.com/bettersandeep/grimoire</div>
 </body></html>
