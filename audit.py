@@ -21,6 +21,10 @@ _JOIN = re.compile(
     re.I)
 _MONTH = re.compile(r"date_trunc\(\s*'month'\s*,\s*\"?(\w+)\"?\s*\)|strftime\(\s*\"?(\w+)\"?\s*,\s*'%Y-%m'\s*\)", re.I)
 _YEAR = re.compile(r"date_trunc\(\s*'year'\s*,\s*\"?(\w+)\"?\s*\)|\byear\(\s*\"?(\w+)\"?\s*\)", re.I)
+_DAY = re.compile(r"date_trunc\(\s*'(?:day|hour|week)'\s*,\s*\"?(\w+)\"?\s*\)|\b(?:hour|dayname|dayofweek|isodow)\(\s*\"?(\w+)\"?\s*\)"
+                  r"|CAST\(\s*\"?(\w+)\"?\s+AS\s+DATE\s*\)|\"?(\w+)\"?::DATE|strftime\(\s*\"?(\w+)\"?\s*,\s*'[^']*%[dHa]", re.I)
+# A rate: divided by a count or sum (not by 100 for units), or named like one.
+_RATIO = re.compile(r"/\s*\(?\s*(?:nullif\s*\(\s*)?(?:count|sum)\s*\(|\b(?:pct|percent\w*|share|rate|ratio)\b", re.I)
 _NOT_NULL = re.compile(r'^\(?\s*"?(\w+)"?\s+IS\s+NOT\s+NULL\s*\)?$', re.I)
 
 
@@ -31,17 +35,23 @@ def _clause(parts, name):
 _memo = {}  # (sql, files as opened) -> value; a changed file changes the key, so nothing goes stale
 
 
-def _value(eng, sql):
-    """First cell of a small read-only query, remembered per file version; None when it fails or is slow."""
+def _rows(eng, sql):
+    """Rows of a small read-only query, remembered per file version; None when it fails or is slow."""
     key = (sql, tuple(sorted((eng._opened or {}).items())))
     if key not in _memo:
         try:
-            _memo[key] = eng.query(sql, AUDIT_TIMEOUT_S)[1][0][0]
+            _memo[key] = eng.query(sql, AUDIT_TIMEOUT_S)[1]
         except engine.EngineError:
             return None
         if len(_memo) > 512:
             _memo.pop(next(iter(_memo)))
     return _memo[key]
+
+
+def _value(eng, sql):
+    """First cell of a small read-only query; None when it fails or is slow."""
+    rows = _rows(eng, sql)
+    return rows[0][0] if rows else None
 
 
 _count = _value
@@ -82,7 +92,28 @@ def assumptions(q, eng):
             out.append(f"shows the top {n} only")
     if q.get("truncated"):
         out.append(f"the result was cut at {len(q['rows'])} rows")
+    zone = _time_zone(q, eng)
+    if zone:
+        out.append(zone)
     return out
+
+
+def _time_zone(q, eng):
+    """Say which clock day and hour buckets use, when the query buckets a timestamp by day or hour."""
+    cols = {next(g for g in m.groups() if g) for m in _DAY.finditer(q["sql"])}
+    for name in q.get("datasets") or []:
+        try:
+            types = dict(eng.schema(engine.ident(name)))
+        except engine.EngineError:
+            continue
+        for col in sorted(cols):
+            typ = str(types.get(col, "")).upper()
+            if typ == "TIMESTAMP WITH TIME ZONE":
+                zone = _value(eng, "SELECT current_setting('TimeZone')")
+                return f"day and hour buckets of {col} use the {zone or 'session'} time zone"
+            if typ.startswith("TIMESTAMP"):
+                return f"{col} has no time zone, so days and hours are as written in the file"
+    return None
 
 
 def pitfalls(q, eng):
@@ -106,9 +137,14 @@ def pitfalls(q, eng):
     for pattern, kind in ((_MONTH, "month"), (_YEAR, "year")):
         m = pattern.search(sql)
         if m:
-            warning = _incomplete_period(q, eng, m.group(1) or m.group(2), kind)
+            column = m.group(1) or m.group(2)
+            warning = _incomplete_period(q, eng, column, kind)
             if warning:
                 out.append(warning)
+            if _RATIO.search(outer_select) and len(q["rows"]) >= 2:
+                warning = _changing_base(q, eng, column, kind)
+                if warning:
+                    out.append(warning)
             break
     return out
 
@@ -128,6 +164,22 @@ def _incomplete_period(q, eng, column, kind):
         shown = any(str(v).startswith(label) for row in q["rows"] for v in row if isinstance(v, str))
         if shown and not complete:
             return f"the last {kind} ({label}) has data only up to {day.isoformat()}, so it looks smaller than it is"
+        return None
+    return None
+
+
+def _changing_base(q, eng, column, kind):
+    """Warn when a rate or average is compared across periods whose row counts differ a lot.
+    The first and last periods are left out: they are often partial, which another check covers."""
+    for name in q.get("datasets") or []:
+        counts = _rows(eng, f'SELECT date_trunc(\'{kind}\', "{column}") AS p, count(*) FROM {engine.ident(name)} '
+                            f'WHERE "{column}" IS NOT NULL GROUP BY 1 ORDER BY 1')
+        if counts is None:
+            continue
+        inner = [n for _p, n in counts[1:-1]]
+        if len(inner) >= 2 and min(inner) and max(inner) >= 2 * min(inner):
+            return (f"rows per {kind} range from {min(inner):,} to {max(inner):,}, so a rate or average can "
+                    "move because the base changed; show the counts next to it")
         return None
     return None
 

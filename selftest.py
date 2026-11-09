@@ -292,6 +292,36 @@ def test_audit(tmp, db):
     assert "Verdict: share with caveats." in out and "Watch out:" in out, out
 
 
+def test_analysis_checks(tmp, db):
+    tools.setup(db=db, eng=None)
+    csv = tmp / "visits.csv"
+    lines = ["ts,converted"]
+    for month, n in ((1, 5), (2, 10), (3, 40), (4, 12), (5, 3)):  # March has 4x the rows of February
+        lines += [f"2026-{month:02d}-{1 + i % 27:02d} {i % 24:02d}:15:00,{i % 3 == 0}" for i in range(n)]
+    csv.write_text("\n".join(lines) + "\n")
+    call(tools.attach, path=str(csv))
+    run = lambda sql: call(tools.query, sql=sql)
+    rate = "SELECT date_trunc('month', ts) AS m, round(100 * count_if(converted) / count(*), 1) AS pct FROM visits GROUP BY 1 ORDER BY 1"
+    q = store.get_query(db, run(rate)["id"])
+    assert any("rows per month range from 10 to 40" in w for w in pkg.audit.pitfalls(q, eng_of())), pkg.audit.pitfalls(q, eng_of())
+    # a total per month is not a rate, and a division by 100 is a unit change: no warning
+    for sql in ("SELECT date_trunc('month', ts) AS m, count(*) AS n FROM visits GROUP BY 1 ORDER BY 1",
+                "SELECT date_trunc('month', ts) AS m, count(*) / 100 AS hundreds FROM visits GROUP BY 1 ORDER BY 1"):
+        q = store.get_query(db, run(sql)["id"])
+        assert not any("rows per month" in w for w in pkg.audit.pitfalls(q, eng_of())), sql
+    # bucketing a timestamp by hour or day says which clock it uses
+    q = store.get_query(db, run("SELECT hour(ts) AS h, count(*) FROM visits GROUP BY 1 ORDER BY 1")["id"])
+    assert "ts has no time zone, so days and hours are as written in the file" in pkg.audit.assumptions(q, eng_of())
+    q = store.get_query(db, run("SELECT ts::DATE AS d, count(*) FROM visits GROUP BY 1 ORDER BY 1")["id"])
+    assert any("no time zone" in a for a in pkg.audit.assumptions(q, eng_of()))
+    q = store.get_query(db, run("SELECT count(*) FROM visits")["id"])
+    assert pkg.audit.assumptions(q, eng_of()) == []
+
+
+def eng_of():
+    return tools._get()[1]
+
+
 def test_metrics(tmp, db):
     tools.setup(db=db, eng=None)
     (tmp / "pay.csv").write_text("region,amount_paise\nNorth,1000\nNorth,2500\nSouth,\n")
@@ -605,6 +635,7 @@ def main():
     test_auto_attach(tmp, db)
     test_data_plugin(tmp, db)
     test_audit(tmp, db)
+    test_analysis_checks(tmp, db)
     test_metrics(tmp, db)
     test_drivers(tmp, db)
     test_relations(tmp, db)
