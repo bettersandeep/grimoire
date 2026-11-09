@@ -206,6 +206,8 @@ def test_learning(tmp, db):
     q2 = store.get_query(db, call(tools.query, sql="SELECT count(*) AS n FROM orders")["id"])
     assert w.steps(q2, tools._get()[1])[-1] == "Result: n 4", w.steps(q2, tools._get()[1])
     assert w.describe("round(sum(amount_cents) / 100, 2) AS revenue") == "added up amount_cents, then divided by 100, then rounded to 2 decimals"
+    q3 = store.get_query(db, call(tools.query, sql="SELECT region, round(sum(amount) / 100.0, 2) AS dollars FROM orders GROUP BY region ORDER BY SUM(amount) DESC")["id"])
+    assert any("Sorted from highest dollars" in x for x in w.steps(q3, tools._get()[1])), w.steps(q3, tools._get()[1])
     assert w.describe("region") is None and w._label("strftime(order_date, '%Y-%m') AS m") == "month of order_date"
     cte = store.get_query(db, call(tools.query, sql="WITH t AS (SELECT * FROM orders) SELECT count(*) AS n FROM t")["id"])
     assert w.steps(cte, tools._get()[1]) == ["Result: n 4"]  # too complex to retell: result only

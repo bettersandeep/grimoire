@@ -115,9 +115,19 @@ def steps(q, eng):
         if order:
             body = order[len("ORDER BY"):].strip()
             first = body.split(",")[0].strip()
-            col = first.split()[0]
-            if col.isdigit() and int(col) <= len(select_items):
-                col = _alias(select_items[int(col) - 1]) or col
+            key = re.sub(r"\s+(ASC|DESC)(\s+NULLS\s+(FIRST|LAST))?\s*$", "", first, flags=re.I).strip()
+            col = key
+            if key.isdigit() and int(key) <= len(select_items):
+                col = _alias(select_items[int(key) - 1]) or key
+            else:  # an expression that a SELECT item computes: use that item's name
+                flat = lambda t: re.sub(r"\s+", "", t).lower()
+                for item in select_items:
+                    expr = re.sub(r"\s+AS\s+\"?\w+\"?\s*$", "", item, flags=re.I)
+                    if _alias(item) and flat(key) in flat(expr):
+                        col = _alias(item)
+                        break
+                else:
+                    col = describe(key) or key
             lines.append(f"Sorted from {'highest' if re.search(r'DESC', first, re.I) else 'lowest'} {col.strip(chr(34))}")
         limit = clause.get("LIMIT")
         if limit and re.match(r"LIMIT\s+\d+$", limit, re.I):
