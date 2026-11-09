@@ -50,7 +50,22 @@ def text_chart(q, limit=25):
     return "\n".join(lines)
 
 
+def ticks(n, width, label_px):
+    """Indexes of the axis labels to draw: evenly spaced so labels never touch, always the last one."""
+    if n <= 1:
+        return list(range(n))
+    step = width / (n - 1)
+    every = max(1, -(-int(label_px * 1.6) // max(1, int(step))))
+    keep = [i for i in range(0, n - 1, every) if (n - 1 - i) * step >= label_px * 1.6]
+    return keep + [n - 1]
+
+
+_MIDNIGHT = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ]00:00:00$")
+
+
 def _fmt(v):
+    if isinstance(v, str) and _MIDNIGHT.match(v):
+        return v[:10]  # a date stored as a timestamp
     if isinstance(v, float):
         return f"{v:,.2f}"
     if isinstance(v, int):
@@ -81,17 +96,17 @@ def _svg_line(q, li, vi):
     x = lambda i: left + (w - left - 10) * (i / max(1, len(rows) - 1))
     y = lambda v: 8 + (h - bottom - 8) * (1 - (v - lo) / ((hi - lo) or 1))
     pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(vals))
-    every = max(1, len(rows) // 6)
+    shown = ticks(len(rows), w - left - 10, 7 * max(len(str(r[li])[:10]) for r in rows))
     anchor = lambda i: "start" if i == 0 else "end" if i == len(rows) - 1 else "middle"  # keep edge labels inside
-    ticks = "".join(f'<text x="{x(i):.1f}" y="{h - 6}" text-anchor="{anchor(i)}" class="lbl">{html.escape(str(r[li])[:10])}</text>'
-                    for i, r in enumerate(rows) if i % every == 0 and len(rows) - 1 - i >= every / 2 or i == len(rows) - 1)
+    labels = "".join(f'<text x="{x(i):.1f}" y="{h - 6}" text-anchor="{anchor(i)}" class="lbl">{html.escape(str(rows[i][li])[:10])}</text>'
+                     for i in shown)
     grid = "".join(f'<line x1="{left}" x2="{w - 10}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="grid"/>'
                    f'<text x="{left - 6}" y="{y(v) + 4:.1f}" text-anchor="end" class="lbl">{html.escape(compact(v))}</text>'
                    for v in marks)
     dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="2.5" class="dot"><title>{html.escape(str(r[li]))}: '
                    f'{html.escape(_fmt(v))}</title></circle>' for i, (r, v) in enumerate(zip(rows, vals)))
     return (f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{html.escape(q["columns"][vi])} over '
-            f'{html.escape(q["columns"][li])}">{grid}<polyline points="{pts}" class="line"/>{dots}{ticks}</svg>')
+            f'{html.escape(q["columns"][li])}">{grid}<polyline points="{pts}" class="line"/>{dots}{labels}</svg>')
 
 
 def chart_kind(columns, rows):
@@ -208,11 +223,11 @@ def _svg_histogram(q):
     bars = "".join(f'<rect x="{left + bw * i + 1:.1f}" y="{y(c):.1f}" width="{max(1, bw - 2):.1f}" height="{max(0, y(0) - y(c)):.1f}" '
                    f'rx="2" class="bar"><title>{html.escape(_fmt(s_))} to {html.escape(_fmt(s_ + step))}: {html.escape(_fmt(c))}'
                    f'</title></rect>' for i, (s_, c) in enumerate(zip(starts, counts)))
-    every = max(1, len(rows) // 6)
-    ticks = "".join(f'<text x="{left + bw * i:.1f}" y="{h - 6}" text-anchor="middle" class="lbl">{html.escape(compact(s_))}</text>'
-                    for i, s_ in enumerate(starts) if i % every == 0)
+    labels = "".join(f'<text x="{left + bw * i:.1f}" y="{h - 6}" text-anchor="{"start" if i == 0 else "middle"}" class="lbl">'
+                     f'{html.escape(compact(starts[i]))}</text>' for i in ticks(len(rows), w - left - 10, 7 * max(len(compact(v)) for v in starts))
+                     if i < len(rows) - 1 or len(rows) == 1)
     return (f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="{html.escape(q["columns"][1])} per bucket of '
-            f'{html.escape(q["columns"][0])}">{grid}{bars}{ticks}</svg>')
+            f'{html.escape(q["columns"][0])}">{grid}{bars}{labels}</svg>')
 
 
 def _svg_scatter(q):
@@ -277,17 +292,57 @@ def _svg_bars(q):
 
 def _table(q, limit=50):
     nums = [bool(q["rows"]) and all(_numeric(r[i]) or r[i] is None for r in q["rows"]) for i in range(len(q["columns"]))]
-    head = "".join(f'<th class="{"num" if n else ""}">{html.escape(c)}</th>' for c, n in zip(q["columns"], nums))
+    head = "".join(f'<th class="{"num" if n else ""}" aria-sort="none"><button type="button" data-num="{int(n)}">'
+                   f'{html.escape(c)}</button></th>' for c, n in zip(q["columns"], nums))
     body = []
     for r in q["rows"][:limit]:
-        cells = "".join(f'<td class="{"num" if _numeric(v) else ""}">{html.escape(_fmt(v))}</td>' for v in r)
+        cells = "".join(f'<td class="{"num" if _numeric(v) else ""}"' + (f' data-v="{v!r}"' if _numeric(v) else "")
+                        + f'>{html.escape(_fmt(v))}</td>' for v in r)
         body.append(f"<tr>{cells}</tr>")
     more = (f'<p class="muted">{len(q["rows"]) - limit} more rows not shown.</p>'
             if len(q["rows"]) > limit else "")
     return f'<div class="tw"><table><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>{more}'
 
 
-def _section(q):
+def _issue_text(i):
+    if i.get("issue") == "duplicate rows":
+        return f"{i['rows']:,} duplicate rows"
+    if i.get("issue") == "empty values":
+        return f"{i['column']}: {i['percent']}% empty"
+    if i.get("issue") == "spelling variants of one value":
+        return f"{i['column']}: " + " / ".join(f"'{v['value']}'" for v in i["variants"])
+    rows = f" ({i['rows']:,} rows)" if i.get("rows") else ""
+    return f"{i.get('column', '')}: {i.get('issue', '')}{rows}"
+
+
+def _files(files, metrics):
+    """The data behind the report: each file's health and problems, column notes, saved metrics."""
+    if not files and not metrics:
+        return ""
+    items = []
+    for f in files:
+        h = f.get("health")
+        chip = (f'<span class="chip" title="{html.escape(", ".join(h["off"]) or "No problems found")}">Health {h["score"]}/100</span>'
+                if h else "")
+        probs = "".join(f"<li>{html.escape(_issue_text(i))}</li>" for i in f.get("issues", [])[:8])
+        notes = "".join(f"<li><b>{html.escape(c)}</b>: {html.escape(t)}</li>" for c, t in f.get("notes", []))
+        items.append(f'<div class="file"><h3>{html.escape(f["name"])} {chip}</h3>'
+                     + (f'<p class="muted">Data problems</p><ul>{probs}</ul>' if probs else '<p class="muted">No data problems found.</p>')
+                     + (f'<p class="muted">Column notes</p><ul>{notes}</ul>' if notes else "") + "</div>")
+    defs = "".join(f"<li><code>{html.escape(n)}()</code> = <code>{html.escape(e)}</code></li>" for n, e in metrics.items())
+    return ('<section class="about"><h2>About the data</h2>' + "".join(items)
+            + (f'<p class="muted">Saved metrics used</p><ul>{defs}</ul>' if defs else "") + "</section>")
+
+
+def _toolbar(queries):
+    names = sorted({n for q in queries for n in q["datasets"]})
+    pick = ("" if len(names) < 2 else '<select id="file" aria-label="File"><option value="">All files</option>'
+            + "".join(f'<option>{html.escape(n)}</option>' for n in names) + "</select>")
+    return (f'<div class="bar-tools" role="search">{pick}<input id="find" type="search" placeholder="Filter queries" '
+            f'aria-label="Filter queries"><span id="count" class="muted" aria-live="polite">{len(queries)} queries</span></div>')
+
+
+def _section(q, caveats=()):
     title = html.escape(q["purpose"] or q["question"] or q["id"])
     question = f'<p class="q">Question: {html.escape(q["question"])}</p>' if q.get("question") else ""
     if len(q["rows"]) == 1 and len(q["columns"]) <= 4 and all(_numeric(v) or v is None for v in q["rows"][0]):
@@ -297,7 +352,11 @@ def _section(q):
     else:
         body = chart_svg(q) + _table(q)
     when = datetime.datetime.fromtimestamp(q["created_at"]).strftime("%Y-%m-%d %H:%M")
-    return (f'<section id="{q["id"]}"><h2><span class="qid">{q["id"]}</span> {title}</h2>{question}{body}'
+    warn = ("".join(f"<li>{html.escape(c)}</li>" for c in caveats))
+    body += f'<div class="caveats"><b>Caveats</b><ul>{warn}</ul></div>' if warn else ""
+    text = html.escape(" ".join(str(x) for x in (q["id"], q["purpose"], q["question"], q["sql"]) if x).lower())
+    return (f'<section id="{q["id"]}" class="query" data-files="{html.escape("|".join(q["datasets"]))}" data-text="{text}">'
+            f'<h2><span class="qid">{q["id"]}</span> {title}</h2>{question}{body}'
             f'<details><summary>SQL behind these numbers</summary><pre>{html.escape(q["sql"])}</pre></details>'
             f'<p class="muted">Run {when} · files: {html.escape(", ".join(q["datasets"]) or "unknown")}</p></section>')
 
@@ -314,16 +373,44 @@ section{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 svg{width:100%;max-width:620px;margin:6px 0}.bar{fill:var(--accent)}.lbl,.val{fill:var(--fg);font-size:12px}
 .cell{fill:var(--accent)}.pt{fill:var(--accent);stroke:var(--card);stroke-width:2}
 .line{fill:none;stroke:var(--accent);stroke-width:2}.dot{fill:var(--accent)}.grid{stroke:var(--line);stroke-width:1}.lbl{fill:var(--muted)}
-.tw{overflow-x:auto}table{border-collapse:collapse;font-size:.88rem;margin-top:8px}th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line)}th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+.tw{overflow:auto;max-height:360px;margin-top:8px}table{border-collapse:collapse;font-size:.88rem}th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--line)}th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+th{position:sticky;top:0;background:var(--card)}th button{all:unset;cursor:pointer;font-weight:600}th button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+th[aria-sort=ascending] button::after{content:" ▲";font-size:.7em}th[aria-sort=descending] button::after{content:" ▼";font-size:.7em}
+.bar-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.bar-tools input,.bar-tools select{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:6px 10px}
+.bar-tools input{flex:1;min-width:180px}.about h3{font-size:1rem;margin:8px 0 2px;display:flex;gap:8px;align-items:center}
+.about ul,.caveats ul{margin:2px 0 8px;padding-left:20px}.chip{font-size:.75rem;font-weight:500;padding:1px 8px;border-radius:5px;background:var(--code);color:var(--muted)}
+.caveats{margin-top:10px;padding:8px 12px;border-left:3px solid var(--accent);background:var(--code);border-radius:4px;font-size:.9rem}
+section[hidden]{display:none}
 details{margin-top:10px}pre{background:var(--code);padding:10px;border-radius:6px;overflow-x:auto;font-size:.82rem}
 """
 
 
-def html_report(queries, title):
-    sections = "".join(_section(q) for q in queries)
+SCRIPT = """
+const q=[...document.querySelectorAll('section.query')],find=document.getElementById('find'),file=document.getElementById('file'),
+count=document.getElementById('count');
+function filter(){const t=find.value.trim().toLowerCase(),f=file?file.value:'';let n=0;
+q.forEach(s=>{const ok=(!t||s.dataset.text.includes(t))&&(!f||s.dataset.files.split('|').includes(f));s.hidden=!ok;n+=ok});
+count.textContent=n===q.length?q.length+' queries':n+' of '+q.length+' queries'}
+find.addEventListener('input',filter);if(file)file.addEventListener('change',filter);
+document.querySelectorAll('th button').forEach(b=>b.addEventListener('click',()=>{const th=b.parentElement,
+tr=th.parentElement,i=[...tr.children].indexOf(th),body=th.closest('table').tBodies[0],
+dir=th.getAttribute('aria-sort')==='ascending'?'descending':'ascending',num=b.dataset.num==='1';
+[...tr.children].forEach(c=>c.setAttribute('aria-sort','none'));th.setAttribute('aria-sort',dir);
+const key=r=>{const c=r.children[i];return num?parseFloat(c.dataset.v??'NaN'):c.textContent};
+[...body.rows].sort((a,b)=>{let x=key(a),y=key(b);if(num){x=isNaN(x)?-Infinity:x;y=isNaN(y)?-Infinity:y}
+const c=num?x-y:String(x).localeCompare(String(y),undefined,{numeric:true});return dir==='ascending'?c:-c})
+.forEach(r=>body.appendChild(r))}));
+"""
+
+
+def html_report(queries, title, context=None):
+    context = context or {}
+    caveats = context.get("caveats", {})
+    sections = (_toolbar(queries) + _files(context.get("files", []), context.get("metrics", {}))
+                + "".join(_section(q, caveats.get(q["id"], ())) for q in queries))
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" '
             f'content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><style>{CSS}</style>'
             f'</head><body><main><header><h1>{html.escape(title)}</h1><p class="muted">Made by Grimoire on {now}. '
             f'Every number below comes from the SQL shown under it, run with DuckDB on your files.</p></header>'
-            f'{sections}</main></body></html>')
+            f'{sections}</main><script>{SCRIPT}</script></body></html>')

@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-from . import engine, learning, metrics, report, store, tools
+from . import audit, engine, learning, metrics, report, store, tools
 
 HELP = """Commands:
   /grimoire                          status
@@ -70,7 +70,7 @@ def run(raw_args="", **kwargs):
         if cmd == "rerun" and rest:
             return _rerun(db, eng, rest[0])
         if cmd == "report":
-            return _report(db, rest[0] if rest else None)
+            return _report(db, rest[0] if rest else None, eng)
         if cmd == "define":
             return _define(db, eng, (raw_args or "").split(None, 1)[1] if len(words) > 1 else "")
         if cmd == "metrics":
@@ -186,7 +186,7 @@ def _rerun(db, eng, qid):
             f"{q['id']} are out of date.")
 
 
-def _report(db, dataset):
+def _report(db, dataset, eng=None):
     queries = store.queries_for(db, dataset)
     if not queries:
         return "No saved queries to report yet." if not dataset else f"No saved queries for {dataset}."
@@ -195,8 +195,27 @@ def _report(db, dataset):
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"report-{datetime.datetime.now():%Y%m%d-%H%M%S}.html")
     with open(path, "w", encoding="utf-8") as f:
-        f.write(report.html_report(queries, title))
+        f.write(report.html_report(queries, title, _report_context(db, eng, queries)))
     return f"Saved a report of {len(queries)} query(ies): {path}\nOpen it in a browser: file://{path}"
+
+
+def _report_context(db, eng, queries):
+    """What the report shows besides results: caveats from the audit, data health, metrics and notes."""
+    caveats = {}
+    if eng is not None:
+        for q in queries:
+            try:
+                lines = audit.assumptions(q, eng) + audit.pitfalls(q, eng)
+            except Exception:
+                lines = []  # a check that fails leaves that query without caveats, never breaks the report
+            if lines:
+                caveats[q["id"]] = lines
+    names = sorted({n for q in queries for n in q["datasets"]})
+    files = [{"name": n, "health": store.get_json(db, f"health:{n}", None), "issues": store.get_json(db, f"issues:{n}", []),
+              "notes": [(col, text) for _t, col, text in store.notes(db, n)]} for n in names]
+    used = {n: e for n, e in store.metrics(db).items() if any(re.search(rf"\b{re.escape(n)}\(", q["question"] or "", re.I)
+                                                              or f"({e})" in q["sql"] for q in queries)}
+    return {"caveats": caveats, "files": files, "metrics": used}
 
 
 def _learn(db, rest):
