@@ -861,6 +861,14 @@ def test_one_check_per_file_version(tmp, db):
         assert len(runs) == 2 and changed["tables"][0]["rows"] == 43 and "spelling_variants" not in changed, (runs, changed)
     finally:
         tools._quality = real
+    # two spaces inside a quoted value stay: the audit counts with the condition as the query wrote it
+    two = tmp / "spaces.csv"
+    two.write_text("city,amount\n" + "New  York,10\n" * 5 + "New York,20\n" * 3 + "Boston,5\n" * 2)
+    call(tools.attach, path=str(two))
+    r = call(tools.query, sql="SELECT sum(amount) AS total\nFROM spaces\nWHERE city = 'New  York'")
+    note = tools.check_reply(f"The total is 50 [{r['id']}].", "test")
+    assert "left out 5 of 10 rows (city = 'New  York')" in note, note
+    assert learning.clauses('SELECT "a  b"   FROM t')[0] == ("SELECT", 'SELECT "a  b"')
     eng = tools._get()[1]
     rows, source, sampled = eng.profile("repeat")
     assert source == "grimoire_sample" and not sampled and rows[0]["count"] == 43, (source, sampled, rows[0])

@@ -65,7 +65,7 @@ def _plain(cond):
     empty = [m.group(1) for m in (_NOT_NULL.match(p) for p in pieces) if m]
     if empty and len(empty) == len(pieces):
         return "empty " + " or ".join(empty)
-    text = re.sub(r"\s+", " ", cond.strip())
+    text = cond.strip()  # already one space between words, and quoted values as written (learning.clauses)
     return text if len(text) <= 80 else text[:77] + "..."
 
 

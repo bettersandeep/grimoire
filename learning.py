@@ -68,7 +68,9 @@ def clauses(sql):
     """[(clause name, clause text)] for the top level of a query (parentheses are skipped over)."""
     # drop comments first (strings stay): on one line, a -- comment would hide the conditions after it
     sql = re.sub(r"('(?:[^']|'')*')|--[^\n]*|/\*.*?\*/", lambda m: m.group(1) or " ", sql, flags=re.S)
-    text = re.sub(r"\s+", " ", sql.strip().rstrip(";"))
+    # one space between words, but not inside quotes: 'New  York' must stay as written, or the row counts
+    # that the audit and the learning card run from this text come out wrong
+    text = re.sub(r"""('(?:[^']|'')*'|"(?:[^"]|"")*")|\s+""", lambda m: m.group(1) or " ", sql.strip().rstrip(";"))
     depth, starts = 0, []
     i = 0
     while i < len(text):
