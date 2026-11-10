@@ -32,7 +32,7 @@ def _rows(eng, sql):
         try:
             _memo[key] = eng.query(sql, AUDIT_TIMEOUT_S)[1]
         except engine.EngineError:
-            return None
+            _memo[key] = None  # also remembered: a count that is too slow is not tried again on every reply
         if len(_memo) > 512:
             _memo.pop(next(iter(_memo)))
     return _memo[key]

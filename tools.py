@@ -172,8 +172,10 @@ def check_reply(text, session_id=None):
     if not values and not cited:
         return ""  # Grimoire was not used here: do not open the database
     db, eng = _get()
-    cited_queries = [q for q in (store.get_query(db, n) for n in cited) if q]
-    out, sourced = _number_check(text, values, file_values, ignore, cited_queries, last_qid, db, eng)
+    found = {n: store.get_query(db, n) for n in cited}
+    cited_queries = [q for q in found.values() if q]
+    missing = [f"q{n}" for n, q in found.items() if not q]  # a made-up id must not look like a receipt
+    out, sourced = _number_check(text, values, file_values, ignore, cited_queries, last_qid, db, eng, missing)
     if out is None:
         return ""
     learn, predict = learning_state()
@@ -187,7 +189,7 @@ def check_reply(text, session_id=None):
     return out
 
 
-def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db, eng):
+def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db, eng, missing=()):
     """(the check footer with its verdict and audit lines, the numbers that trace); (None, []) when the
     chat has no result to check against. The footer is "" when the reply states no number."""
     cited_values, totals = [], []
@@ -212,10 +214,10 @@ def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db
     out = verify.footer(sourced, unsourced, derived, loose, uncited)
     last = store.get_query(db, last_qid) if out and last_qid and not cited_queries else None
     audited = cited_queries or ([last] if last else [])
-    if out and audited:
+    if out and (audited or missing):
         try:
             flipped = verify.rises_on_negatives(text, signed)
-            judged, lines = audit.review(audited, eng, unsourced, verify.caveats(loose, uncited, flipped))
+            judged, lines = audit.review(audited, eng, unsourced, verify.caveats(loose, uncited, flipped, missing))
             out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
         except Exception:
             pass  # the audit is extra; never lose the number check because of it

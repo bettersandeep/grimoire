@@ -200,18 +200,29 @@ class Engine:
                     continue
                 self._sources[dataset] = (real, kind)
                 self._merges[dataset] = merges or {}
-            while self._sources:
-                try:
-                    return self._rebuild()
-                except _Broken as exc:
-                    self._sources.pop(exc.dataset)
-                    self._merges.pop(exc.dataset, None)
+            if self._sources:
+                self._settle()
+
+    def _settle(self, adding=None):
+        """Rebuild. A file that broke after it was opened is left out, so one bad file never blocks the others
+        (the catalog lists it as unreadable). A failure of the dataset now being added goes to the caller."""
+        while True:
+            try:
+                return self._rebuild()
+            except _Broken as exc:
+                if exc.dataset == adding or exc.dataset not in self._sources:
+                    raise
+                self._sources.pop(exc.dataset)
+                self._merges.pop(exc.dataset, None)
 
     def _check(self, path, name, allow_private):
         """(real path, kind, dataset name) of a file, folder or pattern; EngineError when it cannot be opened."""
         expanded = os.path.expanduser(str(path))
         real = os.path.realpath(expanded)
         if is_many(expanded):
+            folder = guard.private_folder(real)  # the pattern's own folder first: do not say if files match in there
+            if folder and not allow_private:
+                raise EngineError(guard.private_error(folder))
             try:
                 files = files_of(real)
             except PermissionError as exc:
@@ -256,14 +267,14 @@ class Engine:
             self._sources[dataset] = (real, kind)
             self._merges[dataset] = merges or {}
             try:
-                self._rebuild()
+                self._settle(adding=dataset)
             except Exception as exc:
                 if previous[0] is None:
                     self._sources.pop(dataset)
                     self._merges.pop(dataset)
                 else:
                     self._sources[dataset], self._merges[dataset] = previous
-                self._rebuild()
+                self._settle()
                 raise EngineError(f"Cannot read {shown}: {exc}") from exc
         return dataset, kind
 
@@ -284,7 +295,7 @@ class Engine:
             if self._sources.pop(dataset, None) is None:
                 raise EngineError(f"Unknown dataset '{dataset}'.")
             self._merges.pop(dataset, None)
-            self._rebuild()
+            self._settle()
 
     def set_merges(self, dataset, merges):
         """Replace the merge rules of an attached dataset and rebuild, so the next query follows them."""
@@ -294,10 +305,10 @@ class Engine:
             previous = self._merges.get(dataset)
             self._merges[dataset] = merges
             try:
-                self._rebuild()
+                self._settle(adding=dataset)
             except Exception as exc:
                 self._merges[dataset] = previous
-                self._rebuild()
+                self._settle()
                 raise EngineError(f"Cannot apply the merge: {exc}") from exc
 
     def merges(self, dataset):
@@ -393,13 +404,16 @@ class Engine:
             key = _file_key(path)
         except OSError:
             return  # the file is gone
-        if not saved or saved.get("version") != repr(key):
-            return
-        if saved.get("rejects") is not None:
-            count, first = saved["rejects"]
-            self._rejects[key] = (count, [tuple(line) for line in first])
-        if saved.get("widen") is not None:
-            self._widen[key] = saved["widen"]
+        try:  # the record comes from the plugin database: take only the shapes this engine writes
+            if saved.get("version") != repr(key):
+                return
+            if saved.get("rejects") is not None:
+                count, first = saved["rejects"]
+                self._rejects[key] = (int(count), [(str(a), str(b), str(c)) for a, b, c in first][:MAX_REJECTS])
+            if saved.get("widen") is not None:  # the type goes into the SQL that builds the view: only DOUBLE
+                self._widen[key] = {str(c): "DOUBLE" for c, t in saved["widen"].items() if t == "DOUBLE"}
+        except (AttributeError, TypeError, ValueError):
+            pass  # a damaged record: the files are read again
 
     def query(self, sql, timeout=TIMEOUT_S):
         """Run one read statement. Returns (columns, rows, truncated)."""
@@ -703,7 +717,7 @@ def _pin_types(con, kind, source, widen):
     if not widen:
         return ""
     if kind == "csv":
-        return ", types = {" + ", ".join(f"{literal(c)}: '{t}'" for c, t in widen.items()) + "}"
+        return ", types = {" + ", ".join(f"{literal(c)}: {literal(t)}" for c, t in widen.items()) + "}"
     cols = [(c, widen.get(c, t)) for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()]
     return ", columns = {" + ", ".join(f"{literal(c)}: {literal(t)}" for c, t in cols) + "}"
 

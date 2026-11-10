@@ -79,7 +79,10 @@ def init(db):
 
 def get_json(db, key, default=None):
     value = get_setting(db, key)
-    return default if value is None else json.loads(value)
+    try:
+        return default if value is None else json.loads(value)
+    except ValueError:
+        return default  # a damaged record reads as "not saved"
 
 
 def set_json(db, key, value):

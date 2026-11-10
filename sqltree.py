@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 
 from . import engine
 
+MAX_SQL = 100_000  # characters; a longer query is not parsed, so its checks say nothing
 _lock = threading.Lock()
 _state = {"con": None}
 
@@ -38,6 +39,8 @@ def _call(function, text):
 @functools.lru_cache(maxsize=256)
 def _tree(sql):
     """The parsed tree of one statement, or None. Read-only: the same object is given to every caller."""
+    if len(sql) > MAX_SQL:
+        return None  # ponytail: 256 cached trees of unbounded size would hold a lot of memory
     try:
         tree = json.loads(_call("json_serialize_sql", sql) or "{}")
         tree["statements"][0]["node"]["type"]
@@ -179,7 +182,7 @@ class Query:
             return None
         if len(a["column_names"]) < 2 or len(b["column_names"]) < 2:
             return None  # without a table name on each side we cannot tell whose column it is
-        if b["column_names"][-2] in (left.get("alias"), left.get("table_name")):
+        if b["column_names"][-2].lower() in ((left.get("alias") or "").lower(), (left.get("table_name") or "").lower()):
             a, b = b, a
         return column(a), column(b)
 

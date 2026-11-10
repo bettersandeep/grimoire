@@ -871,6 +871,9 @@ def test_security(tmp, db):
     hermes_db = Path.home() / ".hermes" / "state.db"
     r = call(tools.attach, path=str(hermes_db))
     assert "does not open files in ~/.hermes" in r.get("error", ""), r
+    # a pattern or a folder in a private place gets the same answer whether files match or not
+    for pattern in ("~/.ssh/*.csv", "~/.SSH/no_such_*.parquet", "~/.hermes", "~/.gnupg/"):
+        assert "does not open files in ~/." in call(tools.attach, path=pattern).get("error", ""), pattern
 
 
 def test_one_check_per_file_version(tmp, db):
@@ -920,6 +923,9 @@ def test_one_check_per_file_version(tmp, db):
         note = tools.check_reply(f"{reply} [{down['id']}].", "cite")
         assert "written as a rise" not in note and "ready to share" in note, (reply, note)
     assert verify.rises_on_negatives("Sales rose 5% and costs rose 5%.", [5.0, -5.0]) == []  # 5 is also a positive result
+    # a citation to a query that does not exist is not a receipt
+    note = tools.check_reply("The file has 43 rows [q987654].", "cite")
+    assert "cites q987654, which is not a saved query" in note and "share with caveats" in note, note
     # attach and profile facts have no id, so they need no citation; with no citation the whole chat counts
     assert "all 2 numbers trace" in tools.check_reply(f"The file has 43 rows [{one['id']}] and 2 columns.", "cite")
     assert "all 2 numbers trace" in tools.check_reply("43 rows and 137 customers.", "cite")
@@ -963,6 +969,37 @@ def test_restart(tmp):
     assert "skipped_lines" not in call(tools.attach, path=str(late))
     commands.run("forget late")
     assert store.get_json(db, "scan:late") is None and store.get_json(db, "scan:other")
+    # a saved scan is data: a type that is not DOUBLE never reaches the SQL that builds the view, and a damaged
+    # record means "read the file again", not a plugin that cannot start
+    for damage in ({"widen": {"a": "VARCHAR'}, header = false) --"}}, {"rejects": "not a list"}, {"widen": 7}):
+        store.set_json(db, "scan:other", {**store.get_json(db, "scan:other"), **damage})
+        tools.setup(db=db, eng=None)
+        assert call(tools.query, sql="SELECT a, b FROM other")["rows"] == [[1, 2]], damage
+    db.execute("UPDATE settings SET value = '{not json' WHERE key = 'scan:other'")
+    tools.setup(db=db, eng=None)
+    assert call(tools.query, sql="SELECT a, b FROM other")["rows"] == [[1, 2]]
+    # a file that breaks after it was opened is left out; it does not block the next attach
+    import duckdb
+    good = tmp / "wide.parquet"
+    duckdb.sql(f"COPY (SELECT 1 AS x) TO '{good}' (FORMAT parquet)")
+    assert call(tools.attach, path=str(good))["tables"][0]["rows"] == 1
+    good.write_text("not a parquet file any more")
+    os.utime(good, (time.time() + 9, time.time() + 9))
+    third = tmp / "third.csv"
+    third.write_text("k\n1\n2\n")
+    assert call(tools.attach, path=str(third))["tables"][0]["rows"] == 2
+    assert "wide" not in tools._get()[1].datasets and "error" in call(tools.attach, path=str(good))
+    assert call(tools.query, sql="SELECT count(*) FROM third")["rows"] == [[2]]
+    # a slow or failing audit count is remembered, not tried again on every reply
+    eng, tries = tools._get()[1], []
+    real_query = eng.query
+    eng.query = lambda sql, timeout=30: tries.append(sql) or real_query(sql, timeout)
+    try:
+        assert pkg.audit._value(eng, "SELECT count(*) FROM no_such_table") is None
+        assert pkg.audit._value(eng, "SELECT count(*) FROM no_such_table") is None and len(tries) == 1, tries
+    finally:
+        del eng.query
+    assert pkg.sqltree.parse("SELECT 1 -- " + "x" * pkg.sqltree.MAX_SQL) is None  # too long to parse and keep
 
 
 def call(handler, **args):

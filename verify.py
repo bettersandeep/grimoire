@@ -138,10 +138,14 @@ def rises_on_negatives(text, signed):
     return list(dict.fromkeys(found))
 
 
-def caveats(loose=(), uncited=(), flipped=()):
-    """Warning lines for numbers that trace, but not cleanly; they make the verdict "share with caveats"."""
+def caveats(loose=(), uncited=(), flipped=(), missing=()):
+    """Warning lines for numbers that trace, but not cleanly; they make the verdict "share with caveats".
+    missing: cited query ids that are not saved queries."""
     join = lambda items: " · ".join(dict.fromkeys(items))
     out = []
+    if missing:
+        out.append(f"the answer cites {join(missing)}, which {'is' if len(set(missing)) == 1 else 'are'} not a saved "
+                   "query, so the numbers were checked against every result of this chat")
     if flipped:
         out.append(f"{join(flipped)} {'is' if len(set(flipped)) == 1 else 'are'} written as a rise, but the result is "
                    "negative; check the direction")
