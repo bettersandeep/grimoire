@@ -29,57 +29,67 @@ def configure(allow_private_folders=False):
 _lock = threading.Lock()
 _state = {"db": None, "engine": None}
 
-# Numbers each session's Grimoire tools returned, and numbers the user typed, for the reply check.
-# ponytail: in memory, last 50 sessions and 50k values each; lost on restart (cited query ids still work).
-_MAX_SESSIONS, _MAX_VALUES = 50, 50000
-_values = OrderedDict()
-_file_values = OrderedDict()  # session -> the numbers from attach and profile: facts with no query id to cite
-_user_numbers = OrderedDict()
-_messages = OrderedDict()   # session -> the user's last message (for /grimoire explain)
-_last_qid = OrderedDict()   # session -> the last query id it ran
-_guesses = OrderedDict()    # session -> the user's prediction, waiting for the answer
-_last = {"session": None}
-_calls = OrderedDict()      # session -> (most tools, fewest tokens) one model call sent; numbers only
+# What each chat needs for the reply check. In memory only.
+# ponytail: the last 50 chats and 50k values each; lost on restart (cited query ids still work).
+_MAX_SESSIONS, _MAX_VALUES, _MAX_USER_NUMBERS = 50, 50000, 1000
+
+
+class _Session:
+    """One chat: the numbers its Grimoire tools returned and the numbers the user typed."""
+
+    def __init__(self):
+        self.used = False       # a Grimoire tool ran in this chat
+        self.values = []        # every number its tools returned
+        self.file_values = []   # of those, the ones from attach and profile: facts with no query id to cite
+        self.user_numbers = []  # numbers the user typed; a reply may repeat them
+        self.message = None     # the user's last message: the question saved with each query
+        self.last_qid = None    # the last query it ran
+        self.guess = None       # the user's prediction, waiting for the answer
+        self.calls = (0, 0)     # (most tools, fewest tokens) one model call sent; numbers only
+
+
+_sessions = OrderedDict()  # session id -> _Session, the most recent last
+_last = {"session": None}  # the chat that used Grimoire last; a reply with no session id is checked against it
 # dataset -> (file version and merges, {table: rows}, spelling variant lines). A chat names its file in many
 # messages; without this, each one counted the rows and ran the health check again (15 s a turn on a wide file).
 _checked = {}
 LEAN_TOOLS = store.LEAN_TOOLS
 
 
-def _bucket(table, session_id):
+def _session(session_id):
+    """This chat's record, made when new (call with _lock held). When there are too many, a chat that
+    never used Grimoire goes first, so a busy Hermes does not push out the chats that hold results."""
     key = session_id or ""
-    bucket = table.setdefault(key, [])
-    table.move_to_end(key)
-    while len(table) > _MAX_SESSIONS:
-        table.popitem(last=False)
-    return bucket
+    session = _sessions.get(key)
+    if session is None:
+        session = _sessions[key] = _Session()
+    _sessions.move_to_end(key)
+    while len(_sessions) > _MAX_SESSIONS:
+        idle = next((k for k, s in _sessions.items() if not s.used and k != key), None)
+        _sessions.pop(idle if idle is not None else next(iter(_sessions)))
+    return session
 
 
 def remember(session_id, result, query=False):
     """query: the numbers are a saved query's result, which an answer cites by id; else attach or profile facts."""
     numbers = verify.numeric_values(result)
     with _lock:
-        for table in (_values,) if query else (_values, _file_values):
-            bucket = _bucket(table, session_id)
-            bucket.extend(numbers)
-            del bucket[:-_MAX_VALUES]
+        session = _session(session_id)
+        session.used = True
+        for values in (session.values,) if query else (session.values, session.file_values):
+            values.extend(numbers)
+            del values[:-_MAX_VALUES]
         _last["session"] = session_id or ""
-
-
-def _put(table, session_id, value):
-    key = session_id or ""
-    table[key] = value
-    table.move_to_end(key)
-    while len(table) > _MAX_SESSIONS:
-        table.popitem(last=False)
 
 
 def remember_user_message(session_id, text):
     raws = [c["raw"].split()[0].rstrip("%") for c in verify.extract(text)]
     with _lock:
-        _bucket(_user_numbers, session_id).extend(raws)
+        session = _session(session_id)
+        session.user_numbers.extend(raws)
+        del session.user_numbers[:-_MAX_USER_NUMBERS]
         if text:
-            _put(_messages, session_id, str(text)[:500])
+            session.message = str(text)[:500]
 
 
 def _column_totals(rows):
@@ -105,7 +115,7 @@ def record_guess(session_id, clarify_result):
         answer = ", ".join(map(str, answer))
     if answer:
         with _lock:
-            _put(_guesses, session_id, str(answer)[:200])
+            _session(session_id).guess = str(answer)[:200]
 
 
 def learning_state():
@@ -120,52 +130,72 @@ def remember_call(session_id, tool_count=None, tokens=None):
     (pre_api_request) and the provider's real input tokens (post_api_request); bad values are ignored."""
     good = lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0
     with _lock:
-        tools_, fewest = _calls.get(session_id or "", (0, 0))
+        session = _sessions.get(session_id or "")
+        tools_, fewest = session.calls if session else (0, 0)
         if good(tool_count):
             tools_ = max(tools_, tool_count)
         if good(tokens):
             fewest = min(fewest, tokens) if fewest else tokens
         if tools_ or fewest:
-            _put(_calls, session_id, (tools_, fewest))
+            _session(session_id).calls = (tools_, fewest)
 
 
 def call_size(session_id):
     """(tools, tokens) of this chat's smallest model call, or None when Hermes did not report it."""
     with _lock:
-        size = _calls.get(session_id or "")
-    return size if size and all(size) else None
+        session = _sessions.get(session_id or "")
+    return session.calls if session and all(session.calls) else None
 
 
 def used_grimoire(session_id):
     with _lock:
-        return (session_id or "") in _values
+        session = _sessions.get(session_id or "")
+    return bool(session and session.used)
+
+
+# only bracketed ids like [q12] or [q3, q4]: "Apple's Q3" is not a citation
+_CITED = re.compile(r"\[\s*(q\d+(?:\s*,\s*q\d+)*)\s*\]")
 
 
 def check_reply(text, session_id=None):
     """Text to add after a final reply: the number check, and in learning mode a card and the
     prediction result. "" when Grimoire was not used in this session."""
     with _lock:
-        key = session_id if session_id in _values else (_last["session"] if not session_id else None)
-        values = list(_values.get(key, [])) if key is not None else []
-        file_values = list(_file_values.get(key, [])) if key is not None else []
-        ignore = list(_user_numbers.get(session_id or "", []))
-        last_qid = _last_qid.get(key) if key is not None else None
-    # only bracketed ids like [q12] or [q3, q4]: "Apple's Q3" is not a citation
-    cited = list(dict.fromkeys(n for group in re.findall(r"\[\s*(q\d+(?:\s*,\s*q\d+)*)\s*\]", text or "")
-                               for n in re.findall(r"q(\d+)", group)))
+        mine = _sessions.get(session_id or "")
+        source = mine if session_id and mine and mine.used else (_sessions.get(_last["session"]) if not session_id else None)
+        values = list(source.values) if source else []
+        file_values = list(source.file_values) if source else []
+        last_qid = source.last_qid if source else None
+        ignore = list(mine.user_numbers) if mine else []
+    cited = list(dict.fromkeys(n for group in _CITED.findall(text or "") for n in re.findall(r"q(\d+)", group)))
     if not values and not cited:
         return ""  # Grimoire was not used here: do not open the database
     db, eng = _get()
-    totals, cited_queries, cited_values = [], [], []
-    for qid in cited:
-        q = store.get_query(db, qid)
-        if q:
-            cited_queries.append(q)
-            cited_values.extend(verify.numeric_values(q["rows"]))
-            totals.extend(_column_totals(q["rows"]))
-    values += cited_values
-    if not values:
+    cited_queries = [q for q in (store.get_query(db, n) for n in cited) if q]
+    out, sourced = _number_check(text, values, file_values, ignore, cited_queries, last_qid, db, eng)
+    if out is None:
         return ""
+    learn, predict = learning_state()
+    if predict:
+        out += _prediction(db, session_id, text, sourced)
+    qid = f"q{cited[-1]}" if cited else last_qid
+    if learn and qid:
+        out += _learning_card(db, eng, qid)
+    if not learn:
+        out += _learn_tip(db)
+    return out
+
+
+def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db, eng):
+    """(the check footer with its verdict and audit lines, the numbers that trace); (None, []) when the
+    chat has no result to check against. The footer is "" when the reply states no number."""
+    cited_values, totals = [], []
+    for q in cited_queries:
+        cited_values.extend(verify.numeric_values(q["rows"]))
+        totals.extend(_column_totals(q["rows"]))
+    values = values + cited_values
+    if not values:
+        return None, []
     # An answer that cites queries must take its numbers from those results, or from attach and profile
     # (they have no id). Every other result of the chat is too wide a net: one list of 200 order ids
     # "sources" any invented count up to 200. Such a number is not counted as traced.
@@ -177,61 +207,72 @@ def check_reply(text, session_id=None):
         uncited = [n for n in unsourced if n not in nowhere]
         unsourced = [n for n in unsourced if n in nowhere]
     out = verify.footer(sourced, unsourced, derived, loose, uncited)
-    if out:
-        audited = cited_queries or [q for q in [store.get_query(db, last_qid)] if q] if last_qid else cited_queries
-        if audited:
-            try:
-                judged, lines = audit.review(audited, eng, unsourced, loose, uncited)
-                out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
-            except Exception:
-                pass  # the audit is extra; never lose the number check because of it
-    learn, predict = learning_state()
-    if predict:
-        with _lock:
-            guess = _guesses.pop(session_id or "", None)
-        if guess:
-            main = next((c for c in verify.extract(text) if c["raw"] in sourced), None)
-            line, close = learning.guess_feedback(guess, main["raw"] if main else None,
-                                                  main["value"] if main else None)
-            if line:
-                stats = store.get_json(db, "predictions", {"asked": 0, "close": 0})
-                if close is not None:
-                    stats["asked"] += 1
-                    stats["close"] += int(close)
-                    store.set_json(db, "predictions", stats)
-                out += (f"\n\n---\nPrediction\n{line} "
-                        f"Score: {stats['close']} of {stats['asked']} guesses within 10%.")
-    qid = f"q{cited[-1]}" if cited else last_qid
-    if learn and qid:
-        q = store.get_query(db, qid)
-        if q:
-            issues, shape = [], {}
-            for name in q["datasets"]:
-                issues += store.get_json(db, f"issues:{name}", [])
-                shape = shape or store.get_json(db, f"shape:{name}", {})
-            seen = store.get_json(db, "seen_concepts", [])
-            if store.get_setting(db, "learn_style", "plain") == "plain":
-                try:
-                    card, key_ = walkthrough.card(q, eng, learning.better_question(issues, shape)), None
-                    store.set_json(db, f"steps:{q['id']}", walkthrough.steps(q, eng))  # for Desktop's Explain
-                except Exception:
-                    card, key_ = learning.card(q["sql"], q["id"], issues, seen, shape)  # never lose the card
-            else:
-                card, key_ = learning.card(q["sql"], q["id"], issues, seen, shape)
-            if card:
-                out += card
-                if key_:
-                    store.set_json(db, "seen_concepts", (seen + [key_])[-8:])
+    last = store.get_query(db, last_qid) if out and last_qid and not cited_queries else None
+    audited = cited_queries or ([last] if last else [])
+    if out and audited:
+        try:
+            judged, lines = audit.review(audited, eng, unsourced, loose, uncited)
+            out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
+        except Exception:
+            pass  # the audit is extra; never lose the number check because of it
+    return out, sourced
+
+
+def _prediction(db, session_id, text, sourced):
+    """The user's guess next to the answer's main number, with the running score; "" when there is no guess."""
+    with _lock:
+        mine = _sessions.get(session_id or "")
+        guess = mine.guess if mine else None
+        if mine:
+            mine.guess = None
+    if not guess:
+        return ""
+    main = next((c for c in verify.extract(text) if c["raw"] in sourced), None)
+    line, close = learning.guess_feedback(guess, main["raw"] if main else None, main["value"] if main else None)
+    if not line:
+        return ""
+    stats = store.get_json(db, "predictions", {"asked": 0, "close": 0})
+    if close is not None:
+        stats["asked"] += 1
+        stats["close"] += int(close)
+        store.set_json(db, "predictions", stats)
+    return f"\n\n---\nPrediction\n{line} Score: {stats['close']} of {stats['asked']} guesses within 10%."
+
+
+def _learning_card(db, eng, qid):
+    """The learning card for one query: plain-words steps, or one SQL idea not taught lately."""
+    q = store.get_query(db, qid)
+    if not q:
+        return ""
+    issues, shape = [], {}
+    for name in q["datasets"]:
+        issues += store.get_json(db, f"issues:{name}", [])
+        shape = shape or store.get_json(db, f"shape:{name}", {})
+    seen = store.get_json(db, "seen_concepts", [])
+    card = key = None
+    if store.get_setting(db, "learn_style", "plain") == "plain":
+        try:
+            card = walkthrough.card(q, eng, learning.better_question(issues, shape))
+            store.set_json(db, f"steps:{q['id']}", walkthrough.steps(q, eng))  # for Desktop's Explain
+        except Exception:
+            card = None  # never lose the card: fall back to the SQL lesson
+    if card is None:
+        card, key = learning.card(q["sql"], q["id"], issues, seen, shape)
+    if card and key:
+        store.set_json(db, "seen_concepts", (seen + [key])[-8:])
+    return card or ""
+
+
+def _learn_tip(db):
+    """Say once that learning mode exists."""
     try:
-        tip = ""
-        if not learn and store.get_setting(db, "learn_tip", "") != "shown":
-            store.set_setting(db, "learn_tip", "shown")
-            tip = ("\nTip: to see how each answer was made, step by step, type /grimoire learn on "
-                   "or switch on Learning mode on the Data page.")
-        out += tip
+        if store.get_setting(db, "learn_tip", "") == "shown":
+            return ""
+        store.set_setting(db, "learn_tip", "shown")
+        return ("\nTip: to see how each answer was made, step by step, type /grimoire learn on "
+                "or switch on Learning mode on the Data page.")
     except Exception:
-        pass  # the tip is extra; never lose the check because of it
-    return out
+        return ""  # the tip is extra; never lose the check because of it
 
 
 def open_db():
@@ -297,11 +338,11 @@ def _resolve_table(eng, dataset, table=None):
 def _receipt(db, session_id, sql, purpose, columns, rows, truncated, datasets):
     """Save a query with the user's question, remember its numbers for the reply check; returns its id."""
     with _lock:
-        question = _messages.get(session_id or "")
+        question = _session(session_id).message
     qid = store.save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=datasets, question=question)
     remember(session_id, rows, query=True)
     with _lock:
-        _put(_last_qid, session_id, qid)
+        _session(session_id).last_qid = qid
     return qid
 
 
@@ -676,9 +717,13 @@ def _datasets_in(sql, datasets):
 
 
 def forget_values():
+    """Drop every number and question kept in memory (the user deleted saved data); call sizes stay."""
     with _lock:
-        for table in (_values, _file_values, _user_numbers, _messages, _last_qid, _guesses, _checked):
-            table.clear()
+        for session in _sessions.values():
+            calls = session.calls
+            session.__init__()
+            session.calls = calls
+        _checked.clear()
 
 
 def _merge_lines(merges):
@@ -689,38 +734,34 @@ def _merge_lines(merges):
     return lines
 
 
+@_tool("note")
 def note(args, **kwargs):
-    try:
-        db, _eng = _get()
-        updated = store.set_note(db, args.get("dataset", ""), args.get("column", ""), args.get("note", ""))
-        if not updated:
-            return _err("No such column in that dataset. Attach or profile the dataset first.")
-        return _ok(saved=True, dataset=args.get("dataset"), column=args.get("column"))
-    except Exception as exc:
-        return _err(f"note failed: {exc}")
+    db, _eng = _get()
+    updated = store.set_note(db, args.get("dataset", ""), args.get("column", ""), args.get("note", ""))
+    if not updated:
+        return _err("No such column in that dataset. Attach or profile the dataset first.")
+    return _ok(saved=True, dataset=args.get("dataset"), column=args.get("column"))
 
 
+@_tool("catalog")
 def catalog(args, **kwargs):
-    try:
-        db, eng = _get()
-        items = []
-        for name, path, kind in store.datasets(db):
-            entry = {"dataset": name, "kind": kind, "path": path}
-            if name in eng.datasets:
-                entry["tables"] = eng.tables(name)
-            else:
-                entry["status"] = "file missing or unreadable"
-            rules = _merge_lines(store.merges(db, name))
-            if rules:
-                entry["merges"] = rules
-            entry["notes"] = [f"{tbl}.{col}: {text}" if "." not in tbl else f"{tbl.split('.', 1)[1]}.{col}: {text}"
-                              for tbl, col, text in store.notes(db, name)]
-            items.append(entry)
-        recent = [{"id": f"q{i}", "purpose": p or s[:80]} for i, p, s in store.recent_queries(db)]
-        saved = {f"{n}()": e for n, e in store.metrics(db).items()}
-        return _ok(datasets=items, recent_queries=recent, **({"metrics": saved} if saved else {}))
-    except Exception as exc:
-        return _err(f"catalog failed: {exc}")
+    db, eng = _get()
+    items = []
+    for name, path, kind in store.datasets(db):
+        entry = {"dataset": name, "kind": kind, "path": path}
+        if name in eng.datasets:
+            entry["tables"] = eng.tables(name)
+        else:
+            entry["status"] = "file missing or unreadable"
+        rules = _merge_lines(store.merges(db, name))
+        if rules:
+            entry["merges"] = rules
+        entry["notes"] = [f"{tbl}.{col}: {text}" if "." not in tbl else f"{tbl.split('.', 1)[1]}.{col}: {text}"
+                          for tbl, col, text in store.notes(db, name)]
+        items.append(entry)
+    recent = [{"id": f"q{i}", "purpose": p or s[:80]} for i, p, s in store.recent_queries(db)]
+    saved = {f"{n}()": e for n, e in store.metrics(db).items()}
+    return _ok(datasets=items, recent_queries=recent, **({"metrics": saved} if saved else {}))
 
 
 def _round(value):
