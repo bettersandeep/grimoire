@@ -185,23 +185,20 @@ def check_detail(text, values, ignore=(), totals=()):
     return [c["raw"] for c in sourced], derived, unsourced, loose
 
 
-def footer(sourced, unsourced, derived=(), loose=()):
+def footer(sourced, unsourced, derived=(), loose=(), uncited=()):
     """A short plain-text footer, or "" when the reply has no numeric claims.
-    loose numbers (matched only by combining two hidden result values) are not counted as tracing."""
+    Not counted as tracing: loose numbers (matched only by combining two hidden result values) and uncited
+    numbers (found only in a result of the chat that the reply does not cite)."""
     derived = [d for d in derived if d not in loose]
     traced = len(sourced) + len(derived)
-    total = traced + len(unsourced) + len(loose)
+    total = traced + len(unsourced) + len(loose) + len(uncited)
     if not total:
         return ""
     how = f" ({len(derived)} by simple arithmetic: {' · '.join(dict.fromkeys(derived))})" if derived else ""
-    if loose and not unsourced:
-        return (f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
-                f"Check how these were worked out: {' · '.join(dict.fromkeys(loose))}")
-    if not unsourced:
+    if not (unsourced or loose or uncited):
         what = "the number traces" if total == 1 else f"all {total} numbers trace"
         return f"\n\n---\nGrimoire check: {what} to query results{how}."
-    missing = " · ".join(dict.fromkeys(unsourced))
-    return (
-        f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
-        f"No source query for: {missing}"
-    )
+    why, which = (("No source query for", unsourced) if unsourced else
+                  ("Check how these were worked out", loose) if loose else ("Not from a cited query", uncited))
+    return (f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
+            f"{why}: {' · '.join(dict.fromkeys(which))}")

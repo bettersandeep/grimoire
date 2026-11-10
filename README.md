@@ -66,6 +66,7 @@ Under the answer, Grimoire adds its check:
 | `Grimoire check: all 2 numbers trace to query results` | Every number in the reply comes from a query result, or from simple arithmetic on numbers the reply shows |
 | `No source query for: 2,000` | The model wrote a number that no query produced, for example a rounded or made-up count |
 | `Check how these were worked out: …` | The number only matches by combining two values the reply does not show, so it may be a coincidence |
+| `Not from a cited query: 137` | The number is in another result of this chat, but not in a query the answer cites, so it may be a coincidence |
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
 | `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
@@ -257,6 +258,7 @@ The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_que
 - The check reads digits only. Number words ("three") and text claims (names, rankings) are not checked.
 - A small number can match a query value by chance; numbers that only match by combining hidden values are marked for a check.
 - Numbers from two arithmetic steps, or from a query the answer does not cite, are flagged even when right.
+- An answer that cites no query is checked against every result of the chat, which is a wider net.
 - Session values live in memory; after a restart only cited query ids are checked.
 - Profiles of tables over 1 million rows use a 1 million row sample.
 - Excel files are not supported, because DuckDB would need to download an extension. Save as CSV.

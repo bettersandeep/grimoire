@@ -843,6 +843,52 @@ def test_security(tmp, db):
     assert "does not open files in ~/.hermes" in r.get("error", ""), r
 
 
+def test_one_check_per_file_version(tmp, db):
+    """A chat names its file in many messages: the rows are counted and the health check runs once per file
+    version, and the check reads a copy in memory, not the file again for every column."""
+    path = tmp / "repeat.csv"
+    path.write_text("region,amount\n" + "North,1\n" * 40 + "north ,2\n" * 2)
+    runs, real = [], tools._quality
+    tools._quality = lambda *a: runs.append(1) or real(*a)
+    try:
+        first = call(tools.attach, path=str(path))
+        again = call(tools.attach, path=str(path))
+        assert len(runs) == 1 and again == first and "region: 'North' / 'north '" in first["spelling_variants"], (runs, first)
+        assert tools.auto_attach(f"total amount in {path}?", "test") and len(runs) == 1, runs
+        path.write_text("region,amount\n" + "North,1\n" * 40 + "South,2\n" * 3)
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        changed = call(tools.attach, path=str(path))
+        assert len(runs) == 2 and changed["tables"][0]["rows"] == 43 and "spelling_variants" not in changed, (runs, changed)
+    finally:
+        tools._quality = real
+    # two spaces inside a quoted value stay: the audit counts with the condition as the query wrote it
+    two = tmp / "spaces.csv"
+    two.write_text("city,amount\n" + "New  York,10\n" * 5 + "New York,20\n" * 3 + "Boston,5\n" * 2)
+    call(tools.attach, path=str(two))
+    r = call(tools.query, sql="SELECT sum(amount) AS total\nFROM spaces\nWHERE city = 'New  York'")
+    note = tools.check_reply(f"The total is 50 [{r['id']}].", "test")
+    assert "left out 5 of 10 rows (city = 'New  York')" in note, note
+    assert learning.clauses('SELECT "a  b"   FROM t')[0] == ("SELECT", 'SELECT "a  b"')
+    # an answer that cites a query takes its numbers from that result: 137 is in a list of ids, not in the cited
+    # count. A new chat, so only its own numbers are in play.
+    ask = lambda handler, **args: json.loads(handler(args, session_id="cite"))
+    ask(tools.attach, path=str(path))
+    ask(tools.query, sql="SELECT * FROM range(1, 201)")
+    one = ask(tools.query, sql="SELECT count(*) AS n FROM repeat")
+    note = tools.check_reply(f"The file has 43 rows [{one['id']}], and 137 customers left.", "cite")
+    assert "1 of 2 numbers trace" in note and "Not from a cited query: 137" in note and "share with caveats" in note, note
+    assert "137 match another result of this chat" in note, note
+    note = tools.check_reply(f"The file has 43 rows [{one['id']}], 137 customers left and 4,321 came back.", "cite")
+    assert "1 of 3 numbers trace" in note and "No source query for: 4,321" in note and "needs revision" in note, note
+    # attach and profile facts have no id, so they need no citation; with no citation the whole chat counts
+    assert "all 2 numbers trace" in tools.check_reply(f"The file has 43 rows [{one['id']}] and 2 columns.", "cite")
+    assert "all 2 numbers trace" in tools.check_reply("43 rows and 137 customers.", "cite")
+    eng = tools._get()[1]
+    rows, source, sampled = eng.profile("repeat")
+    assert source == "grimoire_sample" and not sampled and rows[0]["count"] == 43, (source, sampled, rows[0])
+    assert eng.query("SELECT count(*) FROM grimoire_sample")[1] == [[43]]
+
+
 def call(handler, **args):
     return json.loads(handler(args, session_id="test"))
 
@@ -966,6 +1012,7 @@ def main():
     test_glob_and_names(tmp, db)
     test_charts()
     test_compare(tmp, db)
+    test_one_check_per_file_version(tmp, db)
     print("selftest passed")
 
 

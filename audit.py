@@ -65,7 +65,7 @@ def _plain(cond):
     empty = [m.group(1) for m in (_NOT_NULL.match(p) for p in pieces) if m]
     if empty and len(empty) == len(pieces):
         return "empty " + " or ".join(empty)
-    text = re.sub(r"\s+", " ", cond.strip())
+    text = cond.strip()  # already one space between words, and quoted values as written (learning.clauses)
     return text if len(text) <= 80 else text[:77] + "..."
 
 
@@ -240,10 +240,14 @@ def verdict(unsourced, warnings):
     return "share with caveats" if warnings else "ready to share"
 
 
-def review(queries, eng, unsourced, loose=()):
+def review(queries, eng, unsourced, loose=(), uncited=()):
     """Footer lines for the cited queries: (verdict, [lines]). Empty lines when there is nothing to say.
-    loose: numbers that match only by combining two result values; the reader should check how."""
+    loose: numbers that match only by combining two result values; the reader should check how.
+    uncited: numbers found only in a result of the chat that the answer does not cite."""
     assumed, warned = [], []
+    if uncited:
+        warned.append(f"{' · '.join(dict.fromkeys(uncited))} match another result of this chat, not a query the "
+                      "answer cites, so the match can be chance; cite that query, or compute them again")
     if loose:
         warned.append(f"{' · '.join(dict.fromkeys(loose))} only match by combining two values from the result; "
                       "check how they were worked out, or compute them in SQL")
