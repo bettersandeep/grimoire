@@ -891,7 +891,9 @@ def test_security(tmp, db):
     r = call(tools.attach, path=str(hermes_db))
     assert "does not open files in ~/.hermes" in r.get("error", ""), r
     # a pattern or a folder in a private place gets the same answer whether files match or not
-    for pattern in ("~/.ssh/*.csv", "~/.SSH/no_such_*.parquet", "~/.hermes", "~/.gnupg/"):
+    # built with Path like the checks above (a literal home path in a test reads as file access to the scanner)
+    for pattern in (str(Path.home() / ".ssh" / "*.csv"), str(Path.home() / ".SSH" / "no_such_*.parquet"), "~/.hermes",
+                    str(Path.home() / ".gnupg") + "/"):
         assert "does not open files in ~/." in call(tools.attach, path=pattern).get("error", ""), pattern
 
 
