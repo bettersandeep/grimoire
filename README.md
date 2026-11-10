@@ -223,7 +223,7 @@ Run the benchmark yourself with `bench/make_data.py` and `bench/run.py`.
 | Answers with SQL | DuckDB in memory; the model sees table names, columns and small results, never the rows |
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | Which numbers trace to query results, which come from simple arithmetic, and which have no source |
-| Checks the method | Rows a filter left out, one value spelled two ways, an incomplete last period, an average of averages, a join that counts rows twice, a rate compared across periods with very different row counts, and the clock that day and hour buckets use |
+| Checks the method | Rows a filter left out (also in joins and WITH queries), a number written as a rise when the result is negative, one value spelled two ways, an incomplete last period, an average of averages, a join that counts rows twice, a rate compared across periods with very different row counts, and the clock that day and hour buckets use |
 | Finds data problems | See [Data health](#data-health); a score out of 100 with every point explained |
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Shape of the data | Dimensions, metrics and time columns; metrics that move together; ID columns that join to other files |

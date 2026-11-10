@@ -231,7 +231,10 @@ def test_learning(tmp, db):
     assert any("Sorted from highest dollars" in x for x in w.steps(q3, tools._get()[1])), w.steps(q3, tools._get()[1])
     assert w.describe("region") is None and w._label("strftime(order_date, '%Y-%m') AS m") == "month of order_date"
     cte = store.get_query(db, call(tools.query, sql="WITH t AS (SELECT * FROM orders) SELECT count(*) AS n FROM t")["id"])
-    assert w.steps(cte, tools._get()[1]) == ["Result: n 4"]  # too complex to retell: result only
+    assert w.steps(cte, tools._get()[1]) == ["1. Started with 4 rows from t, a result worked out first",
+                                             "2. Worked out n: counted rows", "Result: n 4"], w.steps(cte, tools._get()[1])
+    union = store.get_query(db, call(tools.query, sql="SELECT count(*) AS n FROM orders UNION ALL SELECT 4")["id"])
+    assert w.steps(union, tools._get()[1]) == ["Result: 2 rows."]  # too complex to retell: result only
     # clause splitter keeps subqueries and strings whole
     parts = learning.clauses("SELECT a FROM (SELECT * FROM t WHERE x = 'GROUP BY') s WHERE b > 1 ORDER BY a LIMIT 5")
     assert [p[0] for p in parts] == ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"], parts
@@ -350,6 +353,32 @@ def test_audit(tmp, db):
     assert any("join on customer_id matches several rows on both sides" in w for w in pkg.audit.pitfalls(q, eng))
     q = store.get_query(db, run("SELECT count(*) FROM orders")["id"])
     assert pkg.audit.pitfalls(q, eng) == [] and pkg.audit.assumptions(q, eng) == []
+    # DuckDB's parser reads the query, so the same checks work on a WITH query, a join and a table alias
+    saved = lambda sql: store.get_query(db, run(sql)["id"])
+    q = saved("WITH t AS (SELECT * FROM orders) SELECT sum(amount) AS total FROM t WHERE amount IS NOT NULL")
+    assert pkg.audit.assumptions(q, eng) == ["left out 1 of 4 rows (empty amount)"], pkg.audit.assumptions(q, eng)
+    joined = "FROM orders o JOIN visits v USING (customer_id)"
+    q = saved(f"SELECT sum(o.amount) AS total {joined} WHERE o.amount IS NOT NULL")
+    total, kept = (eng.query(f"SELECT count(*) {joined}{w}")[1][0][0] for w in ("", " WHERE o.amount IS NOT NULL"))
+    assert total > kept and pkg.audit.assumptions(q, eng) == [f"left out {total - kept} of {total} rows (empty amount)"], (
+        total, kept, pkg.audit.assumptions(q, eng))
+    q = saved("SELECT strftime(o.day, '%Y-%m') AS m, sum(o.amount) AS t FROM orders AS o GROUP BY 1 ORDER BY 1")
+    assert any("the last month (2026-02) has data only up to 2026-02-10" in w for w in pkg.audit.pitfalls(q, eng))
+    q = saved("SELECT customer_id, avg(amount) AS a FROM orders GROUP BY 1 ORDER BY avg(amount) DESC")
+    assert not any(w.startswith("average of averages") for w in pkg.audit.pitfalls(q, eng))  # one average, sorted by itself
+    q = saved("SELECT sum(o.amount) FROM orders o JOIN visits v ON v.customer_id = o.customer_id")
+    assert any("join on customer_id matches several rows on both sides" in w for w in pkg.audit.pitfalls(q, eng))
+    tree = pkg.sqltree.parse("SELECT a, sum(b) / 86.5 FROM \"shop\".\"orders\" WHERE c = 'x' ORDER BY 2 DESC LIMIT 5")
+    assert tree.source() == ("table", '"shop"."orders"', "orders") and tree.limit == 5 and tree.order[0][1], tree.source()
+    assert pkg.sqltree.parse("SELECT 1; SELECT 2") is None and pkg.sqltree.parse("SELECT FROM WHERE") is None
+    assert pkg.sqltree.parse("SELECT 1 UNION ALL SELECT 2") is None
+    assert "count_star()" in tree.count_sql() and "c = 'x'" in tree.count_sql() and "WHERE" not in tree.count_sql(where=False)
+    assert "LIMIT 2" in tree.sql(limit=2) and "ORDER BY" not in tree.sql(order=False) and "LIMIT" not in tree.sql(order=False)
+    # which files a query read: table names only, in any letter case, also in a UNION
+    files = {"orders": None, "visits": None, "shop": None}
+    assert tools._datasets_in("SELECT orders FROM visits", files) == ["visits"]  # a column named like a file
+    assert tools._datasets_in("SELECT 1 FROM Orders UNION ALL SELECT 2 FROM visits_raw", files) == ["orders", "visits"]
+    assert tools._datasets_in('SELECT 1 FROM "shop"."items"', files) == ["shop"]
     # the footer: verdict follows the number check and the warnings
     qid = run("SELECT sum(amount) AS total FROM orders WHERE amount IS NOT NULL")["id"]
     out = tools.check_reply(f"Total is 220 [{qid}].", "test")
@@ -390,8 +419,9 @@ def test_analysis_checks(tmp, db):
     # a rate typed into the SQL is an assumption; unit factors are not
     q = store.get_query(db, run("SELECT round(count(*) / 100.0 / 86.5, 2) AS usd, count(*) * 1000 AS m FROM visits")["id"])
     assert "uses 86.5, written into the SQL, not taken from the data" in pkg.audit.pitfalls(q, eng_of())
-    assert pkg.audit._constants("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000") == ["0.18"]
-    assert pkg.audit._constants("floor(fare_amount / 5) * 5 AS bucket, count(*)") == []  # a bucket width
+    items = lambda text: pkg.sqltree.parse(f"SELECT {text}").select
+    assert pkg.audit._constants(items("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000")) == ["0.18"]
+    assert pkg.audit._constants(items("floor(fare_amount / 5) * 5 AS bucket, count(*)")) == []  # a bucket width
     # one value spelled two ways in the result: a warning, so the verdict is not "ready to share"
     q = {"columns": ["region", "revenue"], "rows": [["North", 29.0], ["South", 24.5], ["north ", 3.0], ["N. Region", 0.9]]}
     assert pkg.audit._result_variants(q) == "'North' / 'north ' / 'N. Region'", pkg.audit._result_variants(q)

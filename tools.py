@@ -14,6 +14,7 @@ from . import guard
 from . import learning
 from . import metrics
 from . import relations
+from . import sqltree
 from . import stats
 from . import store
 from . import verify
@@ -716,8 +717,12 @@ def auto_attach(user_message, session_id=None, cwd=None):
 
 
 def _datasets_in(sql, datasets):
-    """Attached dataset names that the SQL mentions as words (also <name>_raw)."""
-    words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", sql))
+    """Attached datasets that the SQL reads: as a table, as <name>_raw, or as the schema of a SQLite table."""
+    named = sqltree.tables(sql)
+    if named is None:  # DuckDB gave no tree: fall back to every word of the SQL
+        words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", sql.lower()))
+    else:
+        words = {part.lower() for pair in named for part in pair if part}
     return [n for n in datasets if n in words or f"{n}_raw" in words]
 
 
