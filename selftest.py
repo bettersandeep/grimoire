@@ -217,6 +217,9 @@ def test_learning(tmp, db):
     assert r4.startswith("Result: ") and ", n " in r4 and "; 0.0%" not in r4 and ", d " not in r4, r4
     q5 = store.get_query(db, call(tools.query, sql="SELECT region, max(1) AS one FROM orders GROUP BY 1 ORDER BY one DESC, region")["id"])
     assert "the same as" in w.steps(q5, tools._get()[1])[-1], w.steps(q5, tools._get()[1])
+    q6 = store.get_query(db, call(tools.query, sql="SELECT region, sum(amount) AS total, count(*) AS n FROM orders GROUP BY 1 ORDER BY region")["id"])
+    st6 = w.steps(q6, tools._get()[1])
+    assert any(x.endswith("Sorted by region, A to Z") for x in st6) and ", total " in st6[-1], st6
     q2 = store.get_query(db, call(tools.query, sql="SELECT count(*) AS n FROM orders")["id"])
     assert w.steps(q2, tools._get()[1])[-1] == "Result: n 4", w.steps(q2, tools._get()[1])
     assert w.describe("round(sum(amount_cents) / 100, 2) AS revenue") == "added up amount_cents, then divided by 100, then rounded to 2 decimals"
