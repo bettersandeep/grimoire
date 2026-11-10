@@ -211,6 +211,12 @@ def test_learning(tmp, db):
     st = w.steps(q1, tools._get()[1])
     assert "2. Kept rows where empty amount" not in st and any("left out 1" in x for x in st), st
     assert st[-1].startswith("Result: South, total 250; ") and "% more than" in st[-1], st
+    # the comparison uses the sorted column, not the last number column; equal values read "the same as"
+    q4 = store.get_query(db, call(tools.query, sql="SELECT region, count(*) AS n, count(DISTINCT region) AS d FROM orders GROUP BY 1 ORDER BY n DESC, region")["id"])
+    r4 = w.steps(q4, tools._get()[1])[-1]
+    assert r4.startswith("Result: ") and ", n " in r4 and "; 0.0%" not in r4 and ", d " not in r4, r4
+    q5 = store.get_query(db, call(tools.query, sql="SELECT region, max(1) AS one FROM orders GROUP BY 1 ORDER BY one DESC, region")["id"])
+    assert "the same as" in w.steps(q5, tools._get()[1])[-1], w.steps(q5, tools._get()[1])
     q2 = store.get_query(db, call(tools.query, sql="SELECT count(*) AS n FROM orders")["id"])
     assert w.steps(q2, tools._get()[1])[-1] == "Result: n 4", w.steps(q2, tools._get()[1])
     assert w.describe("round(sum(amount_cents) / 100, 2) AS revenue") == "added up amount_cents, then divided by 100, then rounded to 2 decimals"

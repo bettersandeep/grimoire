@@ -140,6 +140,18 @@ def steps(q, eng):
     return out
 
 
+def _sort_column(order, cols, nums):
+    """Index of the number column the first ORDER BY key names (by position or by name), else None."""
+    m = re.match(r"ORDER\s+BY\s+(\"[^\"]+\"|[\w.]+)", order, re.I)
+    if not m:
+        return None
+    key = m.group(1).strip('"')
+    if key.isdigit():
+        i = int(key) - 1
+        return i if i in nums else None
+    return next((i for i in nums if cols[i].lower() == key.split(".")[-1].lower()), None)
+
+
 def _result(q, eng, parts):
     rows, cols = q["rows"], q["columns"]
     if not rows:
@@ -152,6 +164,9 @@ def _result(q, eng, parts):
     if not nums or not labels:
         return f"Result: {len(rows):,} rows."
     li, vi = labels[0], nums[-1]
+    key = _sort_column(dict(parts).get("ORDER BY", ""), cols, nums)  # compare on the column the rows are sorted by
+    if key is not None:
+        vi = key
     top = rows[0]
     line = f"Result: {top[li]}, {cols[vi]} {_fmt(top[vi])}"
     second = rows[1] if len(rows) > 1 else None
@@ -159,9 +174,11 @@ def _result(q, eng, parts):
         core = " ".join(t for n, t in parts if n != "LIMIT")
         found = audit._rows(eng, f"{core} LIMIT 2")
         second = found[1] if found and len(found) > 1 else None
-    if second is not None and "ORDER BY" in names:
+    if second is not None and key is not None:
         a, b = top[vi], second[vi]
-        if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b:
+        if a == b:
+            line += f"; the same as {second[li]}"
+        elif isinstance(a, (int, float)) and isinstance(b, (int, float)) and b:
             pct = (a - b) / abs(b) * 100
             word = "more" if pct >= 0 else "less"
             line += f"; {abs(pct):.1f}% {word} than {second[li]} ({_fmt(b)})"
