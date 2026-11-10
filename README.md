@@ -5,11 +5,14 @@
 Ask Hermes about your data files, and get answers that are fast, cheap and checked.
 Every number has a receipt.
 
-- **Fast and light:** DuckDB answers with one SQL query, so the model never reads your rows.
-  Same question, same free model: 18 s instead of 48 s, and half the input tokens.
+- **Fast on big files:** DuckDB answers with one SQL query, so the model never reads your rows.
+  100 million rows in a 5 GB CSV: 12 s instead of 182 s, same question, same model (Claude Sonnet 5.5).
+- **Fewer tokens:** about 35,500 input tokens per answer on Claude Haiku, Sonnet and Opus 5.5, with 2 model calls.
+  That is 17% to 56% fewer than plain Hermes in 15 of 18 benchmark tests.
 - **Checked:** after each reply, Grimoire checks every number against the query results and flags the ones with no source.
-- **Charts with no tokens:** a Data page in Hermes Desktop with ten chart views, pivots, drill-down and a health score for each file.
-- **Learning mode:** see how each answer was made, step by step, in plain words or SQL.
+- **Study your data with 0 tokens:** a Data page in Hermes Desktop with ten chart views, pivots, drill-down and a health score for each file.
+  Plugin code makes all of it, with no model call.
+- **Learn as you go, 0 tokens:** learning mode shows how each answer was made, step by step, in plain words or SQL.
 
 Works with CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet and SQLite files, and with a folder or pattern such as `sales_*.csv` read as one table.
 
@@ -53,7 +56,7 @@ Works with CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet and SQLite fi
 Name a data file in your message and ask your question in plain words.
 You do not need to set anything up, and all your other Hermes tools keep working.
 
-![A chat answer with Grimoire's check under it: 6 of 7 numbers trace, one made-up total, and one region spelled three ways.](assets/screenshots/chat-check.png)
+![A chat answer with Grimoire's check under it: all 7 numbers trace, one by simple arithmetic, and a warning that one region is spelled three ways.](assets/screenshots/chat-check.png)
 
 Each answer cites its query, like `[q3]`.
 Under the answer, Grimoire adds its check:
@@ -61,7 +64,7 @@ Under the answer, Grimoire adds its check:
 | Line | Means |
 |---|---|
 | `Grimoire check: all 2 numbers trace to query results` | Every number in the reply comes from a query result, or from simple arithmetic on numbers the reply shows |
-| `No source query for: 33.02M` | The model wrote a number that no query produced. Here it added three numbers itself instead of in SQL |
+| `No source query for: 2,000` | The model wrote a number that no query produced, for example a rounded or made-up count |
 | `Check how these were worked out: …` | The number only matches by combining two values the reply does not show, so it may be a coincidence |
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
@@ -69,6 +72,7 @@ Under the answer, Grimoire adds its check:
 
 A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.
 Query q42 said $29.05M, and Grimoire flagged every number in the reply.
+In the benchmark, plain Hermes on Claude Opus 5.5 made the opposite mistake: it divided by 100 twice, so every region total was 100 times too small.
 
 To see the SQL and result behind any number, type `/grimoire sql q3`.
 
@@ -77,7 +81,7 @@ To see the SQL and result behind any number, type `/grimoire sql q3`.
 Hermes Desktop gets a **Data** page with your files, every saved query, and the learning switches.
 Everything on this page runs on your computer and uses no model tokens.
 
-![The Data page: two files with their health scores and data problems, and the saved queries with a result.](assets/screenshots/data-page.png)
+![The Data page: three files with their health scores and data problems, and the saved queries with a chart.](assets/screenshots/data-page.png)
 
 ### Data health
 
@@ -94,7 +98,7 @@ Files up to 1,000,000 rows are checked as soon as you name them; the Data page c
 Every saved query opens with a chart that fits its result, with tabs for **Chart**, **Table**, **SQL** and **How it was made**.
 One click switches the chart type, and hovering a mark shows its value.
 
-![Six chart views: a weekday by hour heatmap, a scatter, a histogram, an area chart, a donut and a pivot table.](assets/screenshots/charts.png)
+![Six chart views: a weekday by hour heatmap, a scatter, a histogram, an area chart with its trend, a donut and a pivot table.](assets/screenshots/charts.png)
 
 | Result shape | Chart |
 |---|---|
@@ -137,7 +141,7 @@ Switch it on with the **Learning mode** switch on the Data page, or type `/grimo
 | SQL | **SQL** on the Data page, or `/grimoire learn sql` | One SQL idea per answer, taken from the query that produced it |
 | Predictions | **Predictions** on the Data page, or `/grimoire learn predict on` | Grimoire asks you to guess the main number first, then scores your guess |
 
-![A learning card under an answer: five numbered steps with row counts, the result, and a question to ask next.](assets/screenshots/learning-card.png)
+![A learning card under an answer: seven numbered steps, the result compared with the runner-up, and a question to ask next.](assets/screenshots/learning-card.png)
 
 `/grimoire explain q12` shows each step next to its SQL.
 Turn learning mode off with the same switch or `/grimoire learn off`.
@@ -187,24 +191,26 @@ The HTML report shows every number with its SQL, sortable tables, the right char
 
 ## Speed and tokens
 
-One real run in Hermes Desktop: the same question on 20.3M rows of NYC taxi data, the same free model.
+One real run in Hermes Desktop: the same question on 100 million rows (a 5 GB CSV), the same model, Claude Sonnet 5.5.
 
-![Plain Hermes and Hermes with Grimoire side by side: 48 s, 87,464 input tokens and 5 tool calls against 18 s, 41,997 input tokens and 2 tool calls.](assets/screenshots/race.png)
+![Plain Hermes and Hermes with Grimoire side by side: 182 s, 61,767 input tokens and 2 tool calls against 12 s, 42,132 input tokens and 1 tool call.](assets/screenshots/race.png)
 
-The benchmark repeats this over many questions, with medians ([details](bench/RESULTS.md)).
+The benchmark repeats this with 8 questions per file on Claude Haiku, Sonnet and Opus 5.5, with medians ([all results](bench/RESULTS.md)).
 Input tokens include cached tokens.
 
-| | Plain Hermes | Hermes with Grimoire | Data bot |
-|---|---|---|---|
-| Correct, 8 questions on a 50k-row sales file | 8 of 8 | 8 of 8 | 8 of 8 |
-| Input tokens per answer | 65,362 | 23,572 (64% fewer) | 4,436 (93% fewer) |
-| Time per answer | 33 s | 15 s | 16 s |
-| Correct, 6 questions on 20.3M taxi rows | 6 of 6 | 6 of 6 | 6 of 6 |
-| Input tokens per answer | 123,437 | 23,866 (81% fewer) | 5,037 (96% fewer) |
-| Time per answer | 75 s | 12 s | 12 s |
-| Tool calls per answer (taxi) | 10 | 1 | 1 |
+| | Plain Hermes | Hermes with Grimoire |
+|---|---|---|
+| Correct answers, 132 questions on 3 models | 131 | 132 |
+| Time per answer, 100M-row CSV (Sonnet) | 170 s | 9 s |
+| Time per answer, 100M-row Parquet (Sonnet) | 8 s | 5 s |
+| Input tokens per answer, 100M-row CSV (Opus) | 69,865 | 35,466 (49% fewer) |
+| Input tokens per answer, taxi Parquet (Sonnet) | 34,138 | 35,958 (5% more) |
+| Model calls per answer | 2 to 4 | 2 |
+| Number check, charts, pivots, learning cards | not built in | built in, 0 tokens |
 
-Grimoire and DuckDB take under 0.3 s of each answer; the rest is the model writing.
+Grimoire is fastest against plain Hermes on large CSV files (5x to 19x); on Parquet plain Hermes is closer (1.2x to 2.5x).
+On most tests Grimoire uses fewer tokens; in 3 of 18 tests plain Hermes used up to 5% fewer.
+The optional Data bot, with only Grimoire's tools, used 4,400 to 5,000 input tokens per answer in an earlier run on a free model.
 Run the benchmark yourself with `bench/make_data.py` and `bench/run.py`.
 
 ## All features
