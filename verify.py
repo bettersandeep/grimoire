@@ -12,6 +12,11 @@ import re
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 _CITE = re.compile(r"\[\s*q\d+(?:\s*,\s*q\d+)*\s*\]|\bq\d+\b", re.I)
 _DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026". The day is not a claim. Month first needs a year
+# or punctuation after the day, so "May 12 orders" is still read; month names are capitalised, so "may 12" is too.
+_MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?"
+_DAY = r"(?:[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?"
+_WRITTEN_DATE = re.compile(rf"\b{_MONTH}\s+{_DAY}(?:,?\s+(?:19|20)\d\d\b|(?=[.,;:)!?]|\s*$))|\b{_DAY}\s+{_MONTH}(?![a-z])")
 _LIST_MARK = re.compile(r"(?m)^(\s*)\d+[.)](?=\s)")
 _NUM = re.compile(r"(?<![\w.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
 _SUFFIX = re.compile(
@@ -31,7 +36,7 @@ def _blank(match):
 def extract(text):
     """Return the numeric claims in text as dicts: raw, value, tol, percent."""
     text = _CODE.sub(_blank, text or "")
-    for pattern in (_CITE, _DATE):
+    for pattern in (_CITE, _DATE, _WRITTEN_DATE):
         text = pattern.sub(_blank, text)
     text = _LIST_MARK.sub(lambda m: m.group(1) + " " * (len(m.group(0)) - len(m.group(1))), text)
     claims = []

@@ -54,6 +54,10 @@ def test_verify():
                "April (2026-04), 4xx codes.\n1. first")
     assert chk(skipped) == ([], [], []), verify.extract(skipped)
     assert chk("top 3 regions", ignore=["3"]) == ([], [], [])
+    # a written date is not a claim: the day of "November 11, 2026" once made a right answer "needs revision"
+    for written in ("but today is November 11, 2026.", "on 11 November 2026", "since Nov. 3, 2026", "until Sept 30."):
+        assert verify.extract(written) == [], (written, verify.extract(written))
+    assert [c["raw"] for c in verify.extract("May 12 orders were late, and may 7 more")] == ["12", "7"]
     assert verify.footer([], []) == ""
     # derived numbers: simple arithmetic on shown numbers, unit changes, column totals
     v = [50000, 1996, 189759.34, 72188507.98, 4651666.19]
