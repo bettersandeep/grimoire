@@ -247,6 +247,10 @@ class Engine:
         except OSError:
             return False
 
+    def opened(self, dataset):
+        """The file version (path, and each file's time and size) the dataset's table was built from."""
+        return self._opened.get(dataset)
+
     def forget(self, dataset):
         with self._lock:
             if self._sources.pop(dataset, None) is None:
@@ -389,16 +393,23 @@ class Engine:
         return [(r[0], r[1]) for r in rows]
 
     def profile(self, table):
-        """(SUMMARIZE rows as dicts, the table they describe). Tables over SAMPLE_ROWS are profiled
-        on a repeatable random sample, so the second value is then "grimoire_sample"."""
-        if self.row_count(table) > SAMPLE_ROWS:
-            with self._lock:  # one scan of the big table; every later check reads the sample
-                _with_timeout(self._con, SETUP_TIMEOUT_S, self._con.execute,
-                              f"CREATE OR REPLACE TEMP TABLE grimoire_sample AS SELECT * FROM {table} "
-                              f"USING SAMPLE {SAMPLE_ROWS} ROWS (reservoir, 7)")
-            table = "grimoire_sample"
-        columns, rows, _ = self.query(f"SUMMARIZE {table}", SETUP_TIMEOUT_S)
-        return [dict(zip(columns, row)) for row in rows], table
+        """(SUMMARIZE rows as dicts, the table the checks must read, sampled).
+        The checks read the table once or more per column, and every read of a view parses the file again
+        (800,000 rows, 27 columns: 16 s). So the rows are copied into memory once: all of them up to
+        SAMPLE_ROWS, a repeatable random sample above that (sampled is then True)."""
+        sampled = self.row_count(table) > SAMPLE_ROWS
+        copy = (f"CREATE OR REPLACE TEMP TABLE grimoire_sample AS SELECT * FROM {table}"
+                + (f" USING SAMPLE {SAMPLE_ROWS} ROWS (reservoir, 7)" if sampled else ""))
+        try:
+            with self._lock:
+                _with_timeout(self._con, SETUP_TIMEOUT_S, self._con.execute, copy)
+            source = "grimoire_sample"
+        except Exception:
+            if sampled:
+                raise
+            source = table  # no room for the copy: read the file itself, slower but the same result
+        columns, rows, _ = self.query(f"SUMMARIZE {source}", SETUP_TIMEOUT_S)
+        return [dict(zip(columns, row)) for row in rows], source, sampled
 
     def column_stats(self, table, column, typ):
         """Detailed statistics for one column: spread and outliers for numbers, top values for text,

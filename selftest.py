@@ -843,6 +843,30 @@ def test_security(tmp, db):
     assert "does not open files in ~/.hermes" in r.get("error", ""), r
 
 
+def test_one_check_per_file_version(tmp, db):
+    """A chat names its file in many messages: the rows are counted and the health check runs once per file
+    version, and the check reads a copy in memory, not the file again for every column."""
+    path = tmp / "repeat.csv"
+    path.write_text("region,amount\n" + "North,1\n" * 40 + "north ,2\n" * 2)
+    runs, real = [], tools._quality
+    tools._quality = lambda *a: runs.append(1) or real(*a)
+    try:
+        first = call(tools.attach, path=str(path))
+        again = call(tools.attach, path=str(path))
+        assert len(runs) == 1 and again == first and "region: 'North' / 'north '" in first["spelling_variants"], (runs, first)
+        assert tools.auto_attach(f"total amount in {path}?", "test") and len(runs) == 1, runs
+        path.write_text("region,amount\n" + "North,1\n" * 40 + "South,2\n" * 3)
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        changed = call(tools.attach, path=str(path))
+        assert len(runs) == 2 and changed["tables"][0]["rows"] == 43 and "spelling_variants" not in changed, (runs, changed)
+    finally:
+        tools._quality = real
+    eng = tools._get()[1]
+    rows, source, sampled = eng.profile("repeat")
+    assert source == "grimoire_sample" and not sampled and rows[0]["count"] == 43, (source, sampled, rows[0])
+    assert eng.query("SELECT count(*) FROM grimoire_sample")[1] == [[43]]
+
+
 def call(handler, **args):
     return json.loads(handler(args, session_id="test"))
 
@@ -966,6 +990,7 @@ def main():
     test_glob_and_names(tmp, db)
     test_charts()
     test_compare(tmp, db)
+    test_one_check_per_file_version(tmp, db)
     print("selftest passed")
 
 

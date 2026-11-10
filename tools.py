@@ -39,6 +39,9 @@ _last_qid = OrderedDict()   # session -> the last query id it ran
 _guesses = OrderedDict()    # session -> the user's prediction, waiting for the answer
 _last = {"session": None}
 _calls = OrderedDict()      # session -> (most tools, fewest tokens) one model call sent; numbers only
+# dataset -> (file version and merges, {table: rows}, spelling variant lines). A chat names its file in many
+# messages; without this, each one counted the rows and ran the health check again (15 s a turn on a wide file).
+_checked = {}
 LEAN_TOOLS = store.LEAN_TOOLS
 
 
@@ -227,6 +230,7 @@ def setup(db=None, eng=None):
     with _lock:
         _state["db"] = db
         _state["engine"] = eng
+        _checked.clear()
 
 
 def _get():
@@ -338,25 +342,33 @@ def attach(args, session_id=None, **kwargs):
                                 allow_private=_options["allow_private_folders"])
     path = eng.datasets[name][0]
     store.save_dataset(db, name, path, kind)
+    version = (eng.opened(name), repr(sorted(eng.merges(name).items())))
+    with _lock:
+        known = _checked.get(name)
+    known = known if known and known[0] == version else None
     tables = []
     for ref in eng.tables(name):
         sql_ref = engine.sql_ref(ref)
         cols = eng.schema(sql_ref)
         store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
-        tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
+        rows = known[1][ref] if known else eng.row_count(sql_ref)
+        tables.append({"table": ref, "rows": rows, "columns": [f"{c} {t}" for c, t in cols]})
     remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
     store.set_json(db, f"rows:{name}", sum(t["rows"] for t in tables))
     result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
-    if len(tables) == 1 and tables[0]["rows"] <= QUICK_CHECK_ROWS:
+    variants = known[2] if known else []
+    if not known and len(tables) == 1 and tables[0]["rows"] <= QUICK_CHECK_ROWS:
         try:  # small enough: find problems now, so the answer and the Data page can mention them
-            variants = [i for i in _quality(db, eng, name, tables[0]["table"])[3]
-                        if i["issue"] == "spelling variants of one value"]
-            if variants:
-                result["spelling_variants"] = [  # values from the file: short, quoted, never instructions
-                    f"{i['column'][:64]}: " + " / ".join(repr(str(v["value"])[:40]) for v in i["variants"][:4])
-                    for i in variants[:3]]
+            variants = [  # values from the file: short, quoted, never instructions
+                f"{i['column'][:64]}: " + " / ".join(repr(str(v["value"])[:40]) for v in i["variants"][:4])
+                for i in _quality(db, eng, name, tables[0]["table"])[3]
+                if i["issue"] == "spelling variants of one value"][:3]
         except Exception:
             pass  # the check is extra; never lose the attach because of it
+    with _lock:
+        _checked[name] = (version, {t["table"]: t["rows"] for t in tables}, variants)
+    if variants:
+        result["spelling_variants"] = variants
     if engine.is_many(path):
         n_files = len(engine.files_of(path))
         result["files"] = n_files
@@ -387,7 +399,7 @@ def _quality(db, eng, dataset, ref):
 
 
 def _quality_locked(db, eng, dataset, ref):
-    rows, source = eng.profile(engine.sql_ref(ref))
+    rows, source, sampled = eng.profile(engine.sql_ref(ref))
     compact, saved = [], []
     for r in rows:
         prof = {
@@ -400,18 +412,18 @@ def _quality_locked(db, eng, dataset, ref):
         compact.append([r["column_name"], r["column_type"], prof["null_pct"], prof["distinct"], prof["min"], prof["max"]])
     store.save_columns(db, dataset, ref, saved)
     issues = eng.issues(source, rows)
-    if source != "grimoire_sample":  # duplicates in a sample say nothing about the table
-        dupes = eng.duplicate_rows(engine.sql_ref(ref))
+    if not sampled:  # duplicates in a sample say nothing about the table
+        dupes = eng.duplicate_rows(source)
         if dupes:
             issues.insert(0, {"issue": "duplicate rows", "rows": dupes})
     store.set_json(db, f"issues:{dataset}", issues[:10])
     try:
-        total = eng.row_count(engine.sql_ref(ref)) if source == "grimoire_sample" else rows[0].get("count") or 0
+        total = eng.row_count(engine.sql_ref(ref)) if sampled else rows[0].get("count") or 0
         score = relations.health(rows, issues, total, eng.rejects(dataset)[0])
         store.set_json(db, f"health:{dataset}", score)
     except Exception:
         score = None  # the score is extra; never lose the profile because of it
-    return rows, source, compact, issues, score
+    return rows, source, compact, issues, score, sampled
 
 
 QUICK_CHECK_ROWS = 1_000_000  # attach checks data quality itself up to this size (well under a second)
@@ -430,7 +442,7 @@ def profile(args, session_id=None, **kwargs):
         stats = eng.column_stats(engine.sql_ref(ref), column, types[column])
         remember(session_id, stats)
         return _ok(table=ref, **{k: _round(engine.to_json_value(v)) for k, v in stats.items()}, note=UNTRUSTED)
-    rows, source, compact, issues, score = _quality(db, eng, dataset, ref)
+    rows, source, compact, issues, score, sampled = _quality(db, eng, dataset, ref)
     remember(session_id, [row[2:] for row in compact])
     remember(session_id, issues)
     result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
@@ -444,7 +456,7 @@ def profile(args, session_id=None, **kwargs):
     if joins:
         result["join_keys"] = joins
     store.set_json(db, f"shape:{dataset}", {"roles": role, "correlations": corr})
-    if source == "grimoire_sample":
+    if sampled:
         result["sampled"] = (f"The table is large, so this profile describes a random sample of "
                              f"{engine.SAMPLE_ROWS:,} rows. Use grimoire_query for exact counts.")
     if score:
@@ -651,7 +663,7 @@ def _datasets_in(sql, datasets):
 
 def forget_values():
     with _lock:
-        for table in (_values, _user_numbers, _messages, _last_qid, _guesses):
+        for table in (_values, _user_numbers, _messages, _last_qid, _guesses, _checked):
             table.clear()
 
 
