@@ -69,6 +69,7 @@ Under the answer, Grimoire adds its check:
 | `Not from a cited query: 137` | The number is in another result of this chat, but not in a query the answer cites, so it may be a coincidence |
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
+| `Watch out: 12.5% is written as a rise, but the result is negative` | The answer says "grew" or "up", and the query result is below zero |
 | `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
 
 A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.

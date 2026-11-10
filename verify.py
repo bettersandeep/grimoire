@@ -43,7 +43,8 @@ def extract(text):
         clock = _CLOCK.match(after)
         if clock and re.fullmatch(r"\d{1,2}", core) and 1 <= int(core) <= 12:
             hour = int(core) % 12 + (12 if clock.group(1).lower().startswith("p") else 0)
-            claims.append({"raw": core + clock.group(0), "value": float(hour), "tol": 0.5, "percent": False})
+            claims.append({"raw": core + clock.group(0), "value": float(hour), "tol": 0.5, "percent": False,
+                           "at": m.start(), "end": m.end() + clock.end()})
             continue  # "6 PM" is the hour 18
         if not suffix and re.match(r"[A-Za-z_\d]", after[:1]):
             continue  # part of a word or id, like 4xx, 2nd, x86
@@ -74,29 +75,82 @@ def extract(text):
             # not for small whole numbers: "$15M" must not match a count of 15
             "written": number if mult != 1.0 and not (number < 100 and number == int(number)) else None,
             "written_tol": 0.5 * 10 ** -decimals,
+            "at": m.start(), "end": m.end() + (suffix.end() if suffix else 0),  # where it stands in the text
         })
     return claims
 
 
-def numeric_values(obj, out=None):
-    """Collect every number in a tool result (nested lists and dicts), as absolute floats."""
+def signed_values(obj, out=None):
+    """Collect every number in a tool result (nested lists and dicts), as floats with their sign."""
     out = [] if out is None else out
     if isinstance(obj, bool):
         return out
     if isinstance(obj, (int, float)):
-        out.append(abs(float(obj)))
+        out.append(float(obj))
     elif isinstance(obj, str):
         text = obj.strip().replace(",", "")
         try:
-            out.append(abs(float(text)))
+            out.append(float(text))
         except ValueError:
             pass
     elif isinstance(obj, dict):
         for v in obj.values():
-            numeric_values(v, out)
+            signed_values(v, out)
     elif isinstance(obj, (list, tuple)):
         for v in obj:
-            numeric_values(v, out)
+            signed_values(v, out)
+    return out
+
+
+def numeric_values(obj):
+    """Every number in a tool result as an absolute float: the check compares sizes ("fell 5%" is -5)."""
+    return [abs(v) for v in signed_values(obj)]
+
+
+# A reply can state the right size with the wrong direction: "grew 12.5%" for a result of -12.5.
+_RISE = r"(?:grew|grows?|grown|growing|growth|rose|rises?|risen|rising|increas(?:e|es|ed|ing)|gain(?:s|ed|ing)?|jump(?:s|ed|ing)?|climb(?:s|ed|ing)?|surg(?:e|es|ed|ing)|up)"
+_RISE_BEFORE = re.compile(rf"\b{_RISE}(?:\s+(?:by|of|about|around|roughly|nearly|almost|over|a|an|the|was|is|at))*\s*[+$€£₹]?\s*$", re.I)
+_RISE_AFTER = re.compile(r"\s*(?:[a-z]+\s+)?(?:increase|growth|rise|gain|jump)\b", re.I)  # "a 12.5% increase"
+_NOT = re.compile(r"\b(?:not|no|never|without)\b|n't\b", re.I)
+
+
+def rises_on_negatives(text, signed):
+    """Raw claims that the text calls a rise, where the results hold that number only as a negative.
+    signed: result numbers with their sign. Only this direction is checked: a fall word next to a positive
+    number is often right ("fell to 1,200", or a column of drops), so it says nothing."""
+    negative = sorted({-v for v in signed if v < 0})
+    positive = sorted({v for v in signed if v > 0})
+    if not negative:
+        return []
+    text = text or ""
+    found = []
+    for claim in extract(text):
+        before = text[max(0, claim["at"] - 60):claim["at"]]
+        rise = _RISE_BEFORE.search(before)
+        if rise:
+            if _NOT.search(before[max(0, rise.start() - 20):rise.start()]):
+                continue  # "did not grow 12.5%"
+        elif not _RISE_AFTER.match(text[claim["end"]:claim["end"] + 40]) or re.search(r"[-−–(]\s*[$€£₹]?\s*$", before):
+            continue  # no rise word next to it, or the reply shows the minus sign itself
+        if (_matches(negative, claim["value"], claim["tol"], claim["percent"])
+                and not _matches(positive, claim["value"], claim["tol"], claim["percent"])):
+            found.append(claim["raw"])
+    return list(dict.fromkeys(found))
+
+
+def caveats(loose=(), uncited=(), flipped=()):
+    """Warning lines for numbers that trace, but not cleanly; they make the verdict "share with caveats"."""
+    join = lambda items: " · ".join(dict.fromkeys(items))
+    out = []
+    if flipped:
+        out.append(f"{join(flipped)} {'is' if len(set(flipped)) == 1 else 'are'} written as a rise, but the result is "
+                   "negative; check the direction")
+    if uncited:
+        out.append(f"{join(uncited)} match another result of this chat, not a query the answer cites, so the "
+                   "match can be chance; cite that query, or compute them again")
+    if loose:
+        out.append(f"{join(loose)} only match by combining two values from the result; check how they were "
+                   "worked out, or compute them in SQL")
     return out
 
 

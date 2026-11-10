@@ -746,7 +746,7 @@ def test_review_fixes(tmp, db):
     random_vals = [round(10 + 37.3 * i % 4990, 2) for i in range(150)] + list(range(1, 51))
     s_, d_, u_, loose = verify.check_detail("Growth was 23.7%, the share 41.2% and the average 18.4.", random_vals)
     assert not u_ and {"23.7%", "41.2%"} <= set(loose), (s_, d_, u_, loose)  # 18.4 is 1840 / 100 here: a unit change
-    assert pkg.audit.review([], None, [], loose)[0] == "share with caveats"
+    assert pkg.audit.review([], None, [], verify.caveats(loose))[0] == "share with caveats"
     # SQL that computes millions (29.05) and a reply that writes "$29.05M": the number traces as written
     musd = verify.numeric_values([["North", 29.05, 15025], ["north ", 3.04, 1609], ["N. Region", 0.94, 493]])
     s_, d_, u_ = verify.check("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
@@ -880,6 +880,16 @@ def test_one_check_per_file_version(tmp, db):
     assert "137 match another result of this chat" in note, note
     note = tools.check_reply(f"The file has 43 rows [{one['id']}], 137 customers left and 4,321 came back.", "cite")
     assert "1 of 3 numbers trace" in note and "No source query for: 4,321" in note and "needs revision" in note, note
+    # the right size with the wrong direction: the result is -12.5 and the reply says it grew
+    down = ask(tools.query, sql="SELECT -12.5 AS change_pct, 40 AS orders")
+    for reply in ("Revenue grew 12.5%", "Revenue is up by 12.5%", "That is a 12.5% increase"):
+        note = tools.check_reply(f"{reply} [{down['id']}].", "cite")
+        assert "12.5% is written as a rise, but the result is negative" in note and "share with caveats" in note, note
+    for reply in ("Revenue fell 12.5%", "Revenue did not grow; it changed by 12.5%", "Revenue grew -12.5%",
+                  "Revenue fell 12.5% while orders grew to 40"):
+        note = tools.check_reply(f"{reply} [{down['id']}].", "cite")
+        assert "written as a rise" not in note and "ready to share" in note, (reply, note)
+    assert verify.rises_on_negatives("Sales rose 5% and costs rose 5%.", [5.0, -5.0]) == []  # 5 is also a positive result
     # attach and profile facts have no id, so they need no citation; with no citation the whole chat counts
     assert "all 2 numbers trace" in tools.check_reply(f"The file has 43 rows [{one['id']}] and 2 columns.", "cite")
     assert "all 2 numbers trace" in tools.check_reply("43 rows and 137 customers.", "cite")

@@ -39,7 +39,7 @@ class _Session:
 
     def __init__(self):
         self.used = False       # a Grimoire tool ran in this chat
-        self.values = []        # every number its tools returned
+        self.values = []        # every number its tools returned, with its sign
         self.file_values = []   # of those, the ones from attach and profile: facts with no query id to cite
         self.user_numbers = []  # numbers the user typed; a reply may repeat them
         self.message = None     # the user's last message: the question saved with each query
@@ -72,7 +72,7 @@ def _session(session_id):
 
 def remember(session_id, result, query=False):
     """query: the numbers are a saved query's result, which an answer cites by id; else attach or profile facts."""
-    numbers = verify.numeric_values(result)
+    numbers = verify.signed_values(result)
     with _lock:
         session = _session(session_id)
         session.used = True
@@ -191,9 +191,11 @@ def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db
     chat has no result to check against. The footer is "" when the reply states no number."""
     cited_values, totals = [], []
     for q in cited_queries:
-        cited_values.extend(verify.numeric_values(q["rows"]))
+        cited_values.extend(verify.signed_values(q["rows"]))
         totals.extend(_column_totals(q["rows"]))
-    values = values + cited_values
+    signed = file_values + cited_values if cited_queries else values + cited_values
+    size = lambda numbers: [abs(v) for v in numbers]  # the check compares sizes; the sign has its own check
+    values, file_values, cited_values = size(values + cited_values), size(file_values), size(cited_values)
     if not values:
         return None, []
     # An answer that cites queries must take its numbers from those results, or from attach and profile
@@ -211,7 +213,8 @@ def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db
     audited = cited_queries or ([last] if last else [])
     if out and audited:
         try:
-            judged, lines = audit.review(audited, eng, unsourced, loose, uncited)
+            flipped = verify.rises_on_negatives(text, signed)
+            judged, lines = audit.review(audited, eng, unsourced, verify.caveats(loose, uncited, flipped))
             out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
         except Exception:
             pass  # the audit is extra; never lose the number check because of it
