@@ -128,7 +128,13 @@ def steps(q, eng):
                         break
                 else:
                     col = describe(key) or key
-            lines.append(f"Sorted from {'highest' if re.search(r'DESC', first, re.I) else 'lowest'} {col.strip(chr(34))}")
+            col = col.strip(chr(34))
+            down = bool(re.search(r"DESC", first, re.I))
+            i = q["columns"].index(col) if col in q["columns"] else None
+            if i is not None and q["rows"] and isinstance(q["rows"][0][i], str):  # names sort A to Z, not low to high
+                lines.append(f"Sorted by {col}, {'Z to A' if down else 'A to Z'}")
+            else:
+                lines.append(f"Sorted from {'highest' if down else 'lowest'} {col}")
         limit = clause.get("LIMIT")
         if limit and re.match(r"LIMIT\s+\d+$", limit, re.I):
             n = int(limit.split()[1])
@@ -163,7 +169,7 @@ def _result(q, eng, parts):
     names = [n for n, _ in parts]
     if not nums or not labels:
         return f"Result: {len(rows):,} rows."
-    li, vi = labels[0], nums[-1]
+    li, vi = labels[0], nums[0]  # the first measure, unless the rows are sorted by another one
     key = _sort_column(dict(parts).get("ORDER BY", ""), cols, nums)  # compare on the column the rows are sorted by
     if key is not None:
         vi = key
