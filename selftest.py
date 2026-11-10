@@ -217,6 +217,10 @@ def test_learning(tmp, db):
     assert r4.startswith("Result: ") and ", n " in r4 and "; 0.0%" not in r4 and ", d " not in r4, r4
     q5 = store.get_query(db, call(tools.query, sql="SELECT region, max(1) AS one FROM orders GROUP BY 1 ORDER BY one DESC, region")["id"])
     assert "the same as" in w.steps(q5, tools._get()[1])[-1], w.steps(q5, tools._get()[1])
+    q7 = store.get_query(db, call(tools.query, sql="SELECT region, round(sum(amount) / 100.0, 2) AS dollars, count(*) AS n FROM orders GROUP BY 1 ORDER BY sum(amount) DESC")["id"])
+    assert "% more than" in w.steps(q7, tools._get()[1])[-1] and ", dollars " in w.steps(q7, tools._get()[1])[-1], w.steps(q7, tools._get()[1])
+    assert w.describe("COUNT(*) FILTER (WHERE amount IS NULL) AS empty") == "counted rows where amount is empty", w.describe("COUNT(*) FILTER (WHERE amount IS NULL) AS empty")
+    assert w.describe("count(amount) AS n") == "counted rows where amount is not empty"
     q6 = store.get_query(db, call(tools.query, sql="SELECT region, sum(amount) AS total, count(*) AS n FROM orders GROUP BY 1 ORDER BY region")["id"])
     st6 = w.steps(q6, tools._get()[1])
     assert any(x.endswith("Sorted by region, A to Z") for x in st6) and ", total " in st6[-1], st6
