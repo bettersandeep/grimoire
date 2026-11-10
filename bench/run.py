@@ -30,7 +30,9 @@ import questions  # noqa: E402
 from questions import MONTHS  # noqa: E402
 import verify  # noqa: E402  (pure module, no Hermes or DuckDB imports)
 
-PROFILES = {"plain": "gbplain", "grimoire": "gbgrim", "databot": "gbdata"}  # databot: Grimoire's tools only
+PROFILES = {"plaincli": "gbplain", "plain": "gbplain", "nodb": "gbnodb", "grimoire": "gbgrim", "databot": "gbdata"}
+# plaincli: plain Hermes runs made while the duckdb CLI was installed (report label). databot: Grimoire's tools only. nodb: plain Hermes whose terminal has no duckdb CLI (a stub that answers
+# "command not found" is first on PATH via terminal.shell_init_files), like most machines.
 # Option (a): free models cost $0, so tokens are priced at a typical paid list price, per million tokens.
 PRICE_IN, PRICE_CACHE, PRICE_OUT = 3.00, 0.30, 15.00
 TIMEOUT_S = 480
@@ -61,11 +63,11 @@ def session(profile, sid):
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         row = con.execute(
-            "SELECT input_tokens, output_tokens, cache_read_tokens, api_call_count, tool_call_count "
+            "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, api_call_count, tool_call_count "
             "FROM sessions WHERE id = ?", (sid,)).fetchone()
     finally:
         con.close()
-    keys = ["input_tokens", "output_tokens", "cache_read_tokens", "api_calls", "tool_calls"]
+    keys = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "api_calls", "tool_calls"]
     return dict(zip(keys, row)) if row else {}
 
 
@@ -79,16 +81,21 @@ def run(args):
     if out.exists():
         for line in out.read_text().splitlines():
             r = json.loads(line)
-            done.add((r["size"], r["setup"], r["q"], r["rep"]))
+            done.add((r["size"], r["setup"], r["q"], r["rep"], r.get("model")))
     qs = nyc if args.set == "nyc" else questions
     for size in args.sizes.split(","):
-        name = nyc.FILES[size] if args.set == "nyc" else f"sales_{size}.csv"
+        if args.set == "nyc":
+            name, truth_name = nyc.FILES[size], nyc.FILES[size]
+        elif size.endswith("pq"):  # the same rows as Parquet (bench/make_data.py --parquet); answers from the CSV
+            name, truth_name = f"sales_{size[:-2]}.parquet", f"sales_{size[:-2]}.csv"
+        else:
+            name = truth_name = f"sales_{size}.csv"
         path = Path(args.data).expanduser() / name
-        answers = qs.truth(path)
+        answers = qs.truth(Path(args.data).expanduser() / truth_name)
         for rep in range(args.repeats):
             for key, template in qs.QUESTIONS:
                 for setup in args.setups.split(","):
-                    if (size, setup, key, rep) in done:
+                    if (size, setup, key, rep, args.model) in done:
                         continue
                     profile = PROFILES[setup]
                     cmd = ["hermes", "-p", profile, "chat", "--source", "tool", "-Q", "-m", args.model,
@@ -132,7 +139,7 @@ def report(args):
             correct = sum(r["score"] == 1.0 for r in rs)
             label = size if size in nyc.FILES else f"{size} rows"
             print(f"| {label} | {setup} | {len(rs)} | {correct}/{len(rs)} ({100 * correct / len(rs):.0f}%) | "
-                  f"{med([(r.get('input_tokens') or 0) + (r.get('cache_read_tokens') or 0) for r in rs]):,.0f} | "
+                  f"{med([(r.get('input_tokens') or 0) + (r.get('cache_read_tokens') or 0) + (r.get('cache_write_tokens') or 0) for r in rs]):,.0f} | "
                   f"{med([r.get('output_tokens') or 0 for r in rs]):,.0f} | {med([r['seconds'] for r in rs]):.0f} s | "
                   f"${med(cost):.4f} | {med([r.get('tool_calls') or 0 for r in rs]):.0f} |")
     print(f"\nRows are files: a sales size or a NYC taxi file. Input tokens include cached input. *Free model, so tokens are priced per million at ${PRICE_IN:.2f} "

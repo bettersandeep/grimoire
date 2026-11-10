@@ -1,6 +1,6 @@
 """Make the benchmark sales files (same seed, same data every time).
 
-python bench/make_data.py OUT_DIR  ->  sales_1k.csv, sales_50k.csv, sales_1m.csv
+python bench/make_data.py OUT_DIR [sizes]  ->  sales_1k.csv, sales_50k.csv, sales_1m.csv, sales_10m.csv
 """
 
 import csv
@@ -10,7 +10,7 @@ from pathlib import Path
 
 REGIONS = ["North"] * 30 + ["north "] * 3 + ["N. Region"] + ["South"] * 25 + ["West"] * 20 + ["East"] * 20
 CATEGORIES = ["Electronics", "Grocery", "Clothing", "Home", "Toys"]
-SIZES = {"1k": 1_000, "50k": 50_000, "1m": 1_000_000}
+SIZES = {"1k": 1_000, "50k": 50_000, "1m": 1_000_000, "10m": 10_000_000, "100m": 100_000_000}
 
 
 def make(path, rows, seed=7):
@@ -29,5 +29,7 @@ if __name__ == "__main__":
     out = Path(sys.argv[1]).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     for name, rows in SIZES.items():
+        if len(sys.argv) > 2 and name not in sys.argv[2].split(","):
+            continue
         make(out / f"sales_{name}.csv", rows)
         print(out / f"sales_{name}.csv")

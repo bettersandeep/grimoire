@@ -1,4 +1,82 @@
-# Benchmark results (2026-11-09)
+# Benchmark results
+
+## v0.25: Claude Haiku, Sonnet and Opus 5.5, up to 100 million rows (2026-11-10)
+
+Same questions, same model on both sides, one run each.
+Plain Hermes is a profile with Grimoire turned off; it can still run Python and install packages.
+Sales files: 8 questions each (`bench/questions.py`), true answers computed by streaming the file.
+NYC taxi data: 6 questions on 20.3M real trips, January to June 2024 (`bench/nyc.py`).
+Raw results: `results-claude.jsonl`.
+Input tokens include cached tokens (cache reads and writes); medians per file.
+
+### Claude Haiku 5.5
+
+| File | Setup | Correct | Input tokens | Output tokens | Time | Model calls |
+|---|---|---|---|---|---|---|
+| Sales CSV, 1M rows | Plain Hermes | 8/8 | 51,708 | 578 | 9 s | 3 |
+| Sales CSV, 1M rows | Hermes with Grimoire | 8/8 | 35,524 | 320 | 6 s | 2 |
+| Sales CSV, 10M rows | Plain Hermes | 8/8 | 51,853 | 652 | 20 s | 3 |
+| Sales CSV, 10M rows | Hermes with Grimoire | 8/8 | 35,412 | 283 | 6 s | 2 |
+| Sales CSV, 100M rows (5 GB) | Plain Hermes | 8/8 | 61,874 | 1,071 | 76 s | 4 |
+| Sales CSV, 100M rows (5 GB) | Hermes with Grimoire | 8/8 | 35,506 | 394 | 12 s | 2 |
+| Sales Parquet, 100M rows (1.6 GB) | Plain Hermes | 8/8 | 81,408 | 1,107 | 14 s | 4 |
+| Sales Parquet, 100M rows (1.6 GB) | Hermes with Grimoire | 8/8 | 35,500 | 328 | 6 s | 2 |
+| NYC taxi Parquet, 20.3M rows | Plain Hermes | 6/6 | 52,566 | 862 | 11 s | 3 |
+| NYC taxi Parquet, 20.3M rows | Hermes with Grimoire | 6/6 | 35,961 | 275 | 5 s | 2 |
+| NYC taxi CSV, 20.3M rows (2 GB) | Plain Hermes | 6/6 | 34,536 | 446 | 49 s | 2 |
+| NYC taxi CSV, 20.3M rows (2 GB) | Hermes with Grimoire | 6/6 | 35,920 | 338 | 7 s | 2 |
+
+### Claude Sonnet 5.5
+
+| File | Setup | Correct | Input tokens | Output tokens | Time | Model calls |
+|---|---|---|---|---|---|---|
+| Sales CSV, 1M rows | Plain Hermes | 8/8 | 42,867 | 411 | 8 s | 2 |
+| Sales CSV, 1M rows | Hermes with Grimoire | 8/8 | 35,516 | 291 | 6 s | 2 |
+| Sales CSV, 10M rows | Plain Hermes | 8/8 | 51,515 | 440 | 20 s | 3 |
+| Sales CSV, 10M rows | Hermes with Grimoire | 8/8 | 35,468 | 264 | 5 s | 2 |
+| Sales CSV, 100M rows (5 GB) | Plain Hermes | 8/8 | 51,728 | 535 | 170 s | 3 |
+| Sales CSV, 100M rows (5 GB) | Hermes with Grimoire | 8/8 | 35,454 | 258 | 9 s | 2 |
+| Sales Parquet, 100M rows (1.6 GB) | Plain Hermes | 8/8 | 51,675 | 374 | 8 s | 3 |
+| Sales Parquet, 100M rows (1.6 GB) | Hermes with Grimoire | 8/8 | 35,478 | 276 | 5 s | 2 |
+| NYC taxi Parquet, 20.3M rows | Plain Hermes | 6/6 | 34,138 | 272 | 6 s | 2 |
+| NYC taxi Parquet, 20.3M rows | Hermes with Grimoire | 6/6 | 35,958 | 246 | 5 s | 2 |
+| NYC taxi CSV, 20.3M rows (2 GB) | Plain Hermes | 6/6 | 34,311 | 263 | 43 s | 2 |
+| NYC taxi CSV, 20.3M rows (2 GB) | Hermes with Grimoire | 6/6 | 35,935 | 278 | 7 s | 2 |
+
+### Claude Opus 5.5
+
+| File | Setup | Correct | Input tokens | Output tokens | Time | Model calls |
+|---|---|---|---|---|---|---|
+| Sales CSV, 1M rows | Plain Hermes | 8/8 | 51,518 | 504 | 12 s | 3 |
+| Sales CSV, 1M rows | Hermes with Grimoire | 8/8 | 35,547 | 324 | 10 s | 2 |
+| Sales CSV, 10M rows | Plain Hermes | 8/8 | 51,930 | 676 | 22 s | 3 |
+| Sales CSV, 10M rows | Hermes with Grimoire | 8/8 | 35,460 | 308 | 9 s | 2 |
+| Sales CSV, 100M rows (5 GB) | Plain Hermes | 8/8 | 69,865 | 906 | 114 s | 4 |
+| Sales CSV, 100M rows (5 GB) | Hermes with Grimoire | 8/8 | 35,466 | 314 | 12 s | 2 |
+| Sales Parquet, 100M rows (1.6 GB) | Plain Hermes | 7/8 | 71,787 | 932 | 22 s | 4 |
+| Sales Parquet, 100M rows (1.6 GB) | Hermes with Grimoire | 8/8 | 35,483 | 327 | 9 s | 2 |
+| NYC taxi Parquet, 20.3M rows | Plain Hermes | 6/6 | 72,652 | 748 | 17 s | 4 |
+| NYC taxi Parquet, 20.3M rows | Hermes with Grimoire | 6/6 | 36,008 | 309 | 7 s | 2 |
+| NYC taxi CSV, 20.3M rows (2 GB) | Plain Hermes | 6/6 | 43,141 | 468 | 50 s | 2 |
+| NYC taxi CSV, 20.3M rows (2 GB) | Hermes with Grimoire | 6/6 | 35,928 | 328 | 9 s | 2 |
+
+### What this shows
+
+- **Correct answers:** Grimoire 132 of 132, plain Hermes 131 of 132.
+  The miss: plain Opus divided cents by 100 twice on the 100M-row Parquet file, so every region total was 100 times too small.
+- **Speed grows with file size.** Grimoire answers in 5 to 12 s at every size.
+  Plain Hermes needs 43 to 170 s on the large CSV files (5x to 19x slower), because it reads the whole file with awk or Python first.
+  On Parquet the gap is small (1.2x to 2.5x): Parquet is quick to read even from plain Python.
+- **Tokens:** Grimoire uses about 35,500 input tokens per answer on every model and file, with 2 model calls.
+  On 15 of the 18 file and model pairs that is 17% to 56% fewer input tokens than plain Hermes.
+  The exceptions are on the taxi data: plain Sonnet (both files) and plain Haiku (CSV) answered in 2 calls and used slightly fewer input tokens than Grimoire (34,100 to 34,500 against about 35,900).
+  Most input tokens are Hermes's own system prompt, sent again with every model call; Grimoire saves by needing fewer calls and shorter answers.
+- **What plain Hermes does not do at any token cost:** the number check after each reply, the Data page charts, pivots and drill-down, and the learning cards.
+  All of these run as plugin code and use 0 model tokens.
+- During the run, plain Hermes installed the `duckdb` Python package by itself (`pip3 install duckdb`), and plain Opus made its own virtual environments to install it.
+  So the plain rows are Hermes with DuckDB through Python where it chose to install it, not Hermes without DuckDB.
+
+## Earlier runs (2026-11-09)
 
 ## v0.19.7: sales data in US dollars
 
