@@ -106,15 +106,28 @@ def save_dataset(db, name, path, kind):
     db.commit()
 
 
-def forget_dataset(db, name):
-    """Delete everything saved about one dataset: profile, notes, merges and the queries that read it."""
+READS = "instr(',' || coalesce(datasets, '') || ',', ',' || ? || ',') > 0"  # a query read this dataset
+
+
+def _clear_facts(db, name):
+    """Delete what Grimoire learned about a file (profile, notes, merges); the saved queries stay."""
     db.execute("DELETE FROM settings WHERE key IN (?, ?, ?, ?)",
                (f"issues:{name}", f"shape:{name}", f"health:{name}", f"rows:{name}"))
-    counts = {}
-    for table, where in (("datasets", "name = ?"), ("columns", "dataset = ?"), ("merges", "dataset = ?"),
-                         ("pending_merges", "dataset = ?"),
-                         ("queries", "instr(',' || coalesce(datasets, '') || ',', ',' || ? || ',') > 0")):
-        counts[table] = db.execute(f"DELETE FROM {table} WHERE {where}", (name,)).rowcount
+    return {table: db.execute(f"DELETE FROM {table} WHERE dataset = ?", (name,)).rowcount
+            for table in ("columns", "merges", "pending_merges")}
+
+
+def reset_dataset(db, name):
+    """A different file now has this name (the old one is gone): its notes and merges do not carry over."""
+    _clear_facts(db, name)
+    db.commit()
+
+
+def forget_dataset(db, name):
+    """Delete everything saved about one dataset: profile, notes, merges and the queries that read it."""
+    counts = _clear_facts(db, name)
+    counts["datasets"] = db.execute("DELETE FROM datasets WHERE name = ?", (name,)).rowcount
+    counts["queries"] = db.execute(f"DELETE FROM queries WHERE {READS}", (name,)).rowcount
     _prune_steps(db)
     db.commit()
     return counts
@@ -305,8 +318,8 @@ def queries_for(db, dataset=None, limit=30):
     """Saved queries, oldest first: of one dataset, or else of the most recent session that ran one."""
     cols = "id, session_id, sql, purpose, columns, rows, truncated, created_at, datasets, question"
     if dataset:
-        rows = db.execute(f"SELECT {cols} FROM queries WHERE instr(',' || coalesce(datasets, '') || ',', "
-                          "',' || ? || ',') > 0 ORDER BY id DESC LIMIT ?", (dataset, limit)).fetchall()
+        rows = db.execute(f"SELECT {cols} FROM queries WHERE {READS} ORDER BY id DESC LIMIT ?",
+                          (dataset, limit)).fetchall()
     else:
         last = db.execute("SELECT session_id FROM queries ORDER BY id DESC LIMIT 1").fetchone()
         if not last:

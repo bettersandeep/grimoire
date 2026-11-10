@@ -53,7 +53,7 @@ def join_keys(eng, dataset, table, columns):
         if other == dataset or len(out) >= MAX_JOINS:
             continue
         for ref in eng.tables(other):
-            sql_ref = ".".join(engine.ident(p) for p in ref.split(".", 1))
+            sql_ref = engine.sql_ref(ref)
             try:
                 theirs = {c for c, _t in eng.schema(sql_ref)}
             except engine.EngineError:

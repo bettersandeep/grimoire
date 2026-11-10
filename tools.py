@@ -1,5 +1,6 @@
 """Tool handlers. Each returns a JSON string, also on error, and never raises."""
 
+import functools
 import json
 import os
 import re
@@ -275,8 +276,35 @@ def _resolve_table(eng, dataset, table=None):
     return tables[0]
 
 
-def _sql_ref(ref):
-    return ".".join(engine.ident(part) for part in ref.split(".", 1))
+def _receipt(db, session_id, sql, purpose, columns, rows, truncated, datasets):
+    """Save a query with the user's question, remember its numbers for the reply check; returns its id."""
+    with _lock:
+        question = _messages.get(session_id or "")
+    qid = store.save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=datasets, question=question)
+    remember(session_id, rows)
+    with _lock:
+        _put(_last_qid, session_id, qid)
+    return qid
+
+
+def _tool(label):
+    """Every tool returns JSON and never raises: a user problem gives its message, anything else '<label> failed'."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def run(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except engine.EngineError as exc:
+                return _err(str(exc))
+            except Exception as exc:  # never let a tool crash the turn
+                return _err(f"{label} failed: {exc}")
+        return run
+    return wrap
+
+
+def _same_files(a, b):
+    """True when two paths name the same data: the same path, or a folder and a pattern over the same files."""
+    return a == b or set(engine.files_of(a)) == set(engine.files_of(b))
 
 
 def _free_name(db, eng, wanted, real):
@@ -285,73 +313,71 @@ def _free_name(db, eng, wanted, real):
     taken = {n: p for n, p, _k in store.datasets(db)} | {n: p for n, (p, _k) in eng.datasets.items()}
     there = lambda p: os.path.exists(p) or (engine.is_many(p) and bool(engine.files_of(p)))
     name, n = wanted, 1
-    same = lambda p: p == real or set(engine.files_of(p)) == set(engine.files_of(real))  # folder vs pattern
-    while name in taken and not same(taken[name]) and there(taken[name]):
+    while name in taken and not _same_files(taken[name], real) and there(taken[name]):
         n += 1
         name = f"{wanted}_{n}"
     return name
 
 
+@_tool("attach")
 def attach(args, session_id=None, **kwargs):
-    try:
-        db, eng = _get()
-        path_arg = args.get("path", "")
-        real = os.path.realpath(os.path.expanduser(str(path_arg)))
-        wanted = engine.dataset_name(path_arg, args.get("name"))
-        if not args.get("name"):
-            wanted = _free_name(db, eng, wanted, real)
-        current = eng.datasets.get(wanted)
-        if current and current[0] == real and eng.fresh(wanted):
-            name, kind = wanted, current[1]  # already open and unchanged: no rebuild
-        else:
-            name, kind = eng.attach(path_arg, wanted, merges=store.merges(db, wanted),
-                                    allow_private=_options["allow_private_folders"])
-        path = eng.datasets[name][0]
-        store.save_dataset(db, name, path, kind)
-        tables = []
-        for ref in eng.tables(name):
-            sql_ref = _sql_ref(ref)
-            cols = eng.schema(sql_ref)
-            store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
-            tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
-        remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
-        store.set_json(db, f"rows:{name}", sum(t["rows"] for t in tables))
-        result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
-        if len(tables) == 1 and tables[0]["rows"] <= QUICK_CHECK_ROWS:
-            try:  # small enough: find problems now, so the answer and the Data page can mention them
-                variants = [i for i in _quality(db, eng, name, tables[0]["table"])[3]
-                            if i["issue"] == "spelling variants of one value"]
-                if variants:
-                    result["spelling_variants"] = [  # values from the file: short, quoted, never instructions
-                        f"{i['column'][:64]}: " + " / ".join(repr(str(v["value"])[:40]) for v in i["variants"][:4])
-                        for i in variants[:3]]
-            except Exception:
-                pass  # the check is extra; never lose the attach because of it
-        if engine.is_many(path):
-            n_files = len(engine.files_of(path))
-            result["files"] = n_files
-            result["files_note"] = "One table over all files; the filename column says which file a row came from."
-            remember(session_id, [n_files])
-        skipped, first = eng.rejects(name)
-        if skipped:
-            result["skipped_lines"] = {
-                "count": skipped,
-                "first": [f"{where}: {engine.cut(str(err), 80)}: {engine.cut(str(text), 120)}" for where, err, text in first[:5]],
-                "note": "These lines are malformed: their values are missing from query results, "
-                        "though count(*) can still count them. Tell the user.",
-            }
-        rules = _merge_lines(eng.merges(name))
-        if rules:
-            result["merges"] = rules
-            result["merges_note"] = (f"Queries use the merged values. The data without merges is "
-                                     f"FROM {engine.ident(name + '_raw')} (CSV, JSON, Parquet).")
-        result["hint"] = f"Query with FROM {_sql_ref(eng.tables(name)[0])}. Profile with grimoire_profile."
-        remember(session_id, [skipped])
-        return _ok(**result)
-    except engine.EngineError as exc:
-        return _err(str(exc))
-    except Exception as exc:  # never let a tool crash the turn
-        return _err(f"attach failed: {exc}")
+    db, eng = _get()
+    path_arg = args.get("path", "")
+    real = os.path.realpath(os.path.expanduser(str(path_arg)))
+    wanted = engine.dataset_name(path_arg, args.get("name"))
+    if not args.get("name"):
+        wanted = _free_name(db, eng, wanted, real)
+    old = {n: p for n, p, _k in store.datasets(db)}.get(wanted)
+    if old and not _same_files(old, real):
+        store.reset_dataset(db, wanted)  # a different file under an old name starts clean
+    current = eng.datasets.get(wanted)
+    if current and current[0] == real and eng.fresh(wanted):
+        name, kind = wanted, current[1]  # already open and unchanged: no rebuild
+    else:
+        name, kind = eng.attach(path_arg, wanted, merges=store.merges(db, wanted),
+                                allow_private=_options["allow_private_folders"])
+    path = eng.datasets[name][0]
+    store.save_dataset(db, name, path, kind)
+    tables = []
+    for ref in eng.tables(name):
+        sql_ref = engine.sql_ref(ref)
+        cols = eng.schema(sql_ref)
+        store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
+        tables.append({"table": ref, "rows": eng.row_count(sql_ref), "columns": [f"{c} {t}" for c, t in cols]})
+    remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
+    store.set_json(db, f"rows:{name}", sum(t["rows"] for t in tables))
+    result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
+    if len(tables) == 1 and tables[0]["rows"] <= QUICK_CHECK_ROWS:
+        try:  # small enough: find problems now, so the answer and the Data page can mention them
+            variants = [i for i in _quality(db, eng, name, tables[0]["table"])[3]
+                        if i["issue"] == "spelling variants of one value"]
+            if variants:
+                result["spelling_variants"] = [  # values from the file: short, quoted, never instructions
+                    f"{i['column'][:64]}: " + " / ".join(repr(str(v["value"])[:40]) for v in i["variants"][:4])
+                    for i in variants[:3]]
+        except Exception:
+            pass  # the check is extra; never lose the attach because of it
+    if engine.is_many(path):
+        n_files = len(engine.files_of(path))
+        result["files"] = n_files
+        result["files_note"] = "One table over all files; the filename column says which file a row came from."
+        remember(session_id, [n_files])
+    skipped, first = eng.rejects(name)
+    if skipped:
+        result["skipped_lines"] = {
+            "count": skipped,
+            "first": [f"{where}: {engine.cut(str(err), 80)}: {engine.cut(str(text), 120)}" for where, err, text in first[:5]],
+            "note": "These lines are malformed: their values are missing from query results, "
+                    "though count(*) can still count them. Tell the user.",
+        }
+    rules = _merge_lines(eng.merges(name))
+    if rules:
+        result["merges"] = rules
+        result["merges_note"] = (f"Queries use the merged values. The data without merges is "
+                                 f"FROM {engine.ident(name + '_raw')} (CSV, JSON, Parquet).")
+    result["hint"] = f"Query with FROM {engine.sql_ref(eng.tables(name)[0])}. Profile with grimoire_profile."
+    remember(session_id, [skipped])
+    return _ok(**result)
 
 
 def _quality(db, eng, dataset, ref):
@@ -361,7 +387,7 @@ def _quality(db, eng, dataset, ref):
 
 
 def _quality_locked(db, eng, dataset, ref):
-    rows, source = eng.profile(_sql_ref(ref))
+    rows, source = eng.profile(engine.sql_ref(ref))
     compact, saved = [], []
     for r in rows:
         prof = {
@@ -375,12 +401,12 @@ def _quality_locked(db, eng, dataset, ref):
     store.save_columns(db, dataset, ref, saved)
     issues = eng.issues(source, rows)
     if source != "grimoire_sample":  # duplicates in a sample say nothing about the table
-        dupes = eng.duplicate_rows(_sql_ref(ref))
+        dupes = eng.duplicate_rows(engine.sql_ref(ref))
         if dupes:
             issues.insert(0, {"issue": "duplicate rows", "rows": dupes})
     store.set_json(db, f"issues:{dataset}", issues[:10])
     try:
-        total = eng.row_count(_sql_ref(ref)) if source == "grimoire_sample" else rows[0].get("count") or 0
+        total = eng.row_count(engine.sql_ref(ref)) if source == "grimoire_sample" else rows[0].get("count") or 0
         score = relations.health(rows, issues, total, eng.rejects(dataset)[0])
         store.set_json(db, f"health:{dataset}", score)
     except Exception:
@@ -391,203 +417,166 @@ def _quality_locked(db, eng, dataset, ref):
 QUICK_CHECK_ROWS = 1_000_000  # attach checks data quality itself up to this size (well under a second)
 
 
+@_tool("profile")
 def profile(args, session_id=None, **kwargs):
-    try:
-        db, eng = _get()
-        dataset = args.get("dataset", "")
-        ref = _resolve_table(eng, dataset, args.get("table"))
-        if args.get("column"):
-            types = dict(eng.schema(_sql_ref(ref)))
-            column = args["column"]
-            if column not in types:
-                return _err(f"No column '{column}' in {ref}. Columns: {', '.join(types)}")
-            stats = eng.column_stats(_sql_ref(ref), column, types[column])
-            remember(session_id, stats)
-            return _ok(table=ref, **{k: _round(engine.to_json_value(v)) for k, v in stats.items()}, note=UNTRUSTED)
-        rows, source, compact, issues, score = _quality(db, eng, dataset, ref)
-        remember(session_id, [row[2:] for row in compact])
-        remember(session_id, issues)
-        result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
-        role = relations.roles(rows)
-        if any(role.values()):
-            result["roles"] = role
-        corr = relations.correlations(eng, source, role["metrics"])
-        if corr:
-            result["correlations"] = corr
-        joins = relations.join_keys(eng, dataset, _sql_ref(ref), [r["column_name"] for r in rows])
-        if joins:
-            result["join_keys"] = joins
-        store.set_json(db, f"shape:{dataset}", {"roles": role, "correlations": corr})
-        if source == "grimoire_sample":
-            result["sampled"] = (f"The table is large, so this profile describes a random sample of "
-                                 f"{engine.SAMPLE_ROWS:,} rows. Use grimoire_query for exact counts.")
-        if score:
-            result["health"] = f"{score['score']}/100" + (f" ({', '.join(score['off'])})" if score["off"] else "")
-        if issues:
-            result["issues"] = issues
-            result["issues_note"] = (
-                "Tell the user about these problems and ask what they mean before you rely on them "
-                "(for example: do empty amounts mean 0?). If the user says variants are the same value, "
-                "save it with grimoire_merge so every later query uses it.")
-        return _ok(**result)
-    except engine.EngineError as exc:
-        return _err(str(exc))
-    except Exception as exc:
-        return _err(f"profile failed: {exc}")
-
-
-def query(args, session_id=None, **kwargs):
-    try:
-        db, eng = _get()
-        _sync(db, eng)
-        sql, used = metrics.expand(args.get("sql", ""), store.metrics(db))
-        columns, rows, truncated = eng.query(sql)
-        with _lock:
-            question = _messages.get(session_id or "")
-        qid = store.save_query(db, session_id, sql, args.get("purpose"), columns, rows, truncated,
-                               datasets=_datasets_in(sql, eng.datasets), question=question)
-        remember(session_id, rows)
-        with _lock:
-            _put(_last_qid, session_id, qid)
-        result = {"id": qid, "columns": columns, "rows": rows, "note": UNTRUSTED}
-        if used:
-            result["metrics"] = f"Used saved metric{'s' if len(used) > 1 else ''}: {', '.join(n + '()' for n in used)}."
-        if truncated:
-            result["truncated"] = f"Only the first {engine.MAX_ROWS} rows are shown. Aggregate in SQL instead."
-        result["cite"] = f"Cite numbers from this result as [{qid}]."
-        return _ok(**result)
-    except engine.EngineError as exc:
-        return _err(str(exc))
-    except Exception as exc:
-        return _err(f"query failed: {exc}")
-
-
-def drivers(args, session_id=None, **kwargs):
-    try:
-        db, eng = _get()
-        _sync(db, eng)
-        dataset = args.get("dataset", "")
-        ref = _resolve_table(eng, dataset, args.get("table"))
-        table = _sql_ref(ref)
-        types = dict(eng.schema(table))
-        time_column = args.get("time_column", "")
-        if time_column not in types:
-            return _err(f"No column '{time_column}' in {ref}. Columns: {', '.join(types)}")
-        raw = (args.get("measure") or "count(*)").strip()
-        if raw in types:  # a bare column means its total: models often pass "amount" for sum(amount)
-            raw = f"sum({engine.ident(raw)})"
-        measure, _used = metrics.expand(raw, store.metrics(db))
-        dims = [d for d in (args.get("dimensions") or []) if d in types and d != time_column]
-        if not dims:  # text columns with 2 to 50 values: the ones a change can be split by
-            text = [c for c, t in types.items() if t == "VARCHAR" and c != time_column]
-            if text:
-                counts = eng.query("SELECT " + ", ".join(f"approx_count_distinct({engine.ident(c)})" for c in text)
-                                   + f" FROM {table}", engine.SETUP_TIMEOUT_S)[1][0]
-                dims = [c for c, n in zip(text, counts) if 2 <= (n or 0) <= 50]
-        dims = dims[:drivers_sql.MAX_DIMENSIONS]
-        if not dims:
-            return _err("No column to split by. Pass dimensions: text columns such as region or category.")
-        sql = drivers_sql.build_sql(table, measure, time_column, str(args.get("before", "")),
-                                    str(args.get("after", "")), dims)
-        columns, rows, truncated = eng.query(sql, engine.SETUP_TIMEOUT_S)
-        if not rows or rows[0][2] is None and rows[0][3] is None:
-            return _err("No rows fall in either period. Check the periods and the time column.")
-        with _lock:
-            question = _messages.get(session_id or "")
-        purpose = args.get("purpose") or f"What drives the change in {measure} from {args.get('before')} to {args.get('after')}"
-        qid = store.save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=[dataset],
-                               question=question)
-        remember(session_id, rows)
-        with _lock:
-            _put(_last_qid, session_id, qid)
-        note = ("pct_of_change: each segment's share of the total change; shares in one dimension add up to 100."
-                if drivers_sql.additive(measure) else
-                "The measure is not a plain sum or count, so pct_of_change does not add up; compare before and after.")
-        return _ok(id=qid, split_by=dims, columns=columns, rows=rows, how_to_read=note, note=UNTRUSTED,
-                   cite=f"Cite numbers from this result as [{qid}].")
-    except engine.EngineError as exc:
-        return _err(str(exc))
-    except Exception as exc:
-        return _err(f"drivers failed: {exc}")
-
-
-def compare(args, session_id=None, **kwargs):
-    try:
-        db, eng = _get()
-        _sync(db, eng)
-        dataset = args.get("dataset", "")
-        ref = _resolve_table(eng, dataset, args.get("table"))
-        table = _sql_ref(ref)
-        types = dict(eng.schema(table))
-        group = args.get("group_column", "")
-        if group not in types:
-            return _err(f"No column '{group}' in {ref}. Columns: {', '.join(types)}")
-        a, b = str(args.get("a", "")), str(args.get("b", ""))
-        raw = (args.get("measure") or "").strip()
-        measure, _used = metrics.expand(engine.ident(raw) if raw in types else raw, store.metrics(db))
-        if not measure:
-            return _err("Pass measure: a numeric column, or a condition like status = 'paid'.")
-        g = f"CAST({engine.ident(group)} AS VARCHAR)"
-        kind = eng.query(f"SELECT typeof({measure}) FROM {table} LIMIT 1")[1]
-        rate = bool(kind) and kind[0][0] == "BOOLEAN"
-        stat = (f"count_if({measure}) AS hits, round(avg(CAST({measure} AS INTEGER)) * 100, 4) AS pct" if rate else
-                f"round(avg({measure}), 4) AS mean, round(stddev_samp({measure}), 4) AS sd")
-        sql = (f"SELECT {g} AS grp, count({measure}) AS n, {stat} FROM {table} "
-               f"WHERE {g} IN ({engine.literal(a)}, {engine.literal(b)}) GROUP BY 1")
-        columns, rows, _ = eng.query(sql, engine.SETUP_TIMEOUT_S)
-        found = {r[0]: r for r in rows}
-        missing = [v for v in (a, b) if v not in found]
-        if missing:
-            return _err(f"No rows where {group} is {', '.join(repr(v) for v in missing)}. Check the exact values.")
-        (_, n1, x1, y1), (_, n2, x2, y2) = found[a], found[b]
-        if rate:
-            test, label = stats.proportions(x1, n1, x2, n2), "pct"
-            p_value, diff = (test[1] if test else None), round(y1 - y2, 4)
-        else:
-            test, label = stats.welch(n1, float(x1 or 0), y1, n2, float(x2 or 0), y2), "mean"
-            p_value, diff = (test[2] if test else None), round(float(x1 or 0) - float(x2 or 0), 4)
-        out_cols = ["group", "rows", label, "difference", "p_value"]
-        out_rows = [[a, n1, y1 if rate else x1, diff, None if p_value is None else round(p_value, 6)],
-                    [b, n2, y2 if rate else x2, None, None]]
-        with _lock:
-            question = _messages.get(session_id or "")
-        purpose = args.get("purpose") or f"Is the {label} of {raw} different for {group} {a} and {b}?"
-        qid = store.save_query(db, session_id, sql, purpose, out_cols, out_rows, False, datasets=[dataset], question=question)
-        remember(session_id, out_rows)
-        with _lock:
-            _put(_last_qid, session_id, qid)
-        method = ("two-proportion z-test" if rate else "Welch's t-test")
-        return _ok(id=qid, columns=out_cols, rows=out_rows, test=method,
-                   verdict=stats.verdict(p_value, n1, n2), note=UNTRUSTED, cite=f"Cite numbers from this result as [{qid}].")
-    except engine.EngineError as exc:
-        return _err(str(exc))
-    except Exception as exc:
-        return _err(f"compare failed: {exc}")
-
-
-def merge(args, **kwargs):
-    try:
-        db, eng = _get()
-        dataset = args.get("dataset", "")
-        ref = _resolve_table(eng, dataset, args.get("table"))
-        column, into = args.get("column", ""), args.get("into")
-        values = [v for v in (args.get("values") or []) if isinstance(v, str)]
-        if not values or not isinstance(into, str):
-            return _err("Pass values (a list of text values) and into (the value to use instead).")
-        types = dict(eng.schema(_sql_ref(ref)))
+    db, eng = _get()
+    dataset = args.get("dataset", "")
+    ref = _resolve_table(eng, dataset, args.get("table"))
+    if args.get("column"):
+        types = dict(eng.schema(engine.sql_ref(ref)))
+        column = args["column"]
         if column not in types:
             return _err(f"No column '{column}' in {ref}. Columns: {', '.join(types)}")
-        if types[column] != "VARCHAR":
-            return _err(f"Column '{column}' is {types[column]}. Merges work on text columns only.")
-        store.propose_merge(db, dataset, ref, column, values, into)
-        return _ok(status="pending", rule=f"{column}: {', '.join(repr(v) for v in values)} -> {into!r}",
-                   next=("Not applied yet. Tell the user to type /grimoire merges approve to apply it to every "
-                         "later query (the file does not change), or /grimoire merges reject to drop it. "
-                         "Until then, queries use the original values."))
-    except engine.EngineError as exc:
-        return _err(str(exc))
-    except Exception as exc:
-        return _err(f"merge failed: {exc}")
+        stats = eng.column_stats(engine.sql_ref(ref), column, types[column])
+        remember(session_id, stats)
+        return _ok(table=ref, **{k: _round(engine.to_json_value(v)) for k, v in stats.items()}, note=UNTRUSTED)
+    rows, source, compact, issues, score = _quality(db, eng, dataset, ref)
+    remember(session_id, [row[2:] for row in compact])
+    remember(session_id, issues)
+    result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
+    role = relations.roles(rows)
+    if any(role.values()):
+        result["roles"] = role
+    corr = relations.correlations(eng, source, role["metrics"])
+    if corr:
+        result["correlations"] = corr
+    joins = relations.join_keys(eng, dataset, engine.sql_ref(ref), [r["column_name"] for r in rows])
+    if joins:
+        result["join_keys"] = joins
+    store.set_json(db, f"shape:{dataset}", {"roles": role, "correlations": corr})
+    if source == "grimoire_sample":
+        result["sampled"] = (f"The table is large, so this profile describes a random sample of "
+                             f"{engine.SAMPLE_ROWS:,} rows. Use grimoire_query for exact counts.")
+    if score:
+        result["health"] = f"{score['score']}/100" + (f" ({', '.join(score['off'])})" if score["off"] else "")
+    if issues:
+        result["issues"] = issues
+        result["issues_note"] = (
+            "Tell the user about these problems and ask what they mean before you rely on them "
+            "(for example: do empty amounts mean 0?). If the user says variants are the same value, "
+            "save it with grimoire_merge so every later query uses it.")
+    return _ok(**result)
+
+
+@_tool("query")
+def query(args, session_id=None, **kwargs):
+    db, eng = _get()
+    _sync(db, eng)
+    sql, used = metrics.expand(args.get("sql", ""), store.metrics(db))
+    columns, rows, truncated = eng.query(sql)
+    qid = _receipt(db, session_id, sql, args.get("purpose"), columns, rows, truncated, _datasets_in(sql, eng.datasets))
+    result = {"id": qid, "columns": columns, "rows": rows, "note": UNTRUSTED}
+    if used:
+        result["metrics"] = f"Used saved metric{'s' if len(used) > 1 else ''}: {', '.join(n + '()' for n in used)}."
+    if truncated:
+        result["truncated"] = f"Only the first {engine.MAX_ROWS} rows are shown. Aggregate in SQL instead."
+    result["cite"] = f"Cite numbers from this result as [{qid}]."
+    return _ok(**result)
+
+
+@_tool("drivers")
+def drivers(args, session_id=None, **kwargs):
+    db, eng = _get()
+    _sync(db, eng)
+    dataset = args.get("dataset", "")
+    ref = _resolve_table(eng, dataset, args.get("table"))
+    table = engine.sql_ref(ref)
+    types = dict(eng.schema(table))
+    time_column = args.get("time_column", "")
+    if time_column not in types:
+        return _err(f"No column '{time_column}' in {ref}. Columns: {', '.join(types)}")
+    raw = (args.get("measure") or "count(*)").strip()
+    if raw in types:  # a bare column means its total: models often pass "amount" for sum(amount)
+        raw = f"sum({engine.ident(raw)})"
+    measure, _used = metrics.expand(raw, store.metrics(db))
+    dims = [d for d in (args.get("dimensions") or []) if d in types and d != time_column]
+    if not dims:  # text columns with 2 to 50 values: the ones a change can be split by
+        text = [c for c, t in types.items() if t == "VARCHAR" and c != time_column]
+        if text:
+            counts = eng.query("SELECT " + ", ".join(f"approx_count_distinct({engine.ident(c)})" for c in text)
+                               + f" FROM {table}", engine.SETUP_TIMEOUT_S)[1][0]
+            dims = [c for c, n in zip(text, counts) if 2 <= (n or 0) <= 50]
+    dims = dims[:drivers_sql.MAX_DIMENSIONS]
+    if not dims:
+        return _err("No column to split by. Pass dimensions: text columns such as region or category.")
+    sql = drivers_sql.build_sql(table, measure, time_column, str(args.get("before", "")),
+                                str(args.get("after", "")), dims)
+    columns, rows, truncated = eng.query(sql, engine.SETUP_TIMEOUT_S)
+    if not rows or rows[0][2] is None and rows[0][3] is None:
+        return _err("No rows fall in either period. Check the periods and the time column.")
+    purpose = args.get("purpose") or f"What drives the change in {measure} from {args.get('before')} to {args.get('after')}"
+    qid = _receipt(db, session_id, sql, purpose, columns, rows, truncated, [dataset])
+    note = ("pct_of_change: each segment's share of the total change; shares in one dimension add up to 100."
+            if drivers_sql.additive(measure) else
+            "The measure is not a plain sum or count, so pct_of_change does not add up; compare before and after.")
+    return _ok(id=qid, split_by=dims, columns=columns, rows=rows, how_to_read=note, note=UNTRUSTED,
+               cite=f"Cite numbers from this result as [{qid}].")
+
+
+@_tool("compare")
+def compare(args, session_id=None, **kwargs):
+    db, eng = _get()
+    _sync(db, eng)
+    dataset = args.get("dataset", "")
+    ref = _resolve_table(eng, dataset, args.get("table"))
+    table = engine.sql_ref(ref)
+    types = dict(eng.schema(table))
+    group = args.get("group_column", "")
+    if group not in types:
+        return _err(f"No column '{group}' in {ref}. Columns: {', '.join(types)}")
+    a, b = str(args.get("a", "")), str(args.get("b", ""))
+    raw = (args.get("measure") or "").strip()
+    measure, _used = metrics.expand(engine.ident(raw) if raw in types else raw, store.metrics(db))
+    if not measure:
+        return _err("Pass measure: a numeric column, or a condition like status = 'paid'.")
+    g = f"CAST({engine.ident(group)} AS VARCHAR)"
+    kind = eng.query(f"SELECT typeof({measure}) FROM {table} LIMIT 1")[1]
+    rate = bool(kind) and kind[0][0] == "BOOLEAN"
+    stat = (f"count_if({measure}) AS hits, round(avg(CAST({measure} AS INTEGER)) * 100, 4) AS pct" if rate else
+            f"round(avg({measure}), 4) AS mean, round(stddev_samp({measure}), 4) AS sd")
+    sql = (f"SELECT {g} AS grp, count({measure}) AS n, {stat} FROM {table} "
+           f"WHERE {g} IN ({engine.literal(a)}, {engine.literal(b)}) GROUP BY 1")
+    columns, rows, _ = eng.query(sql, engine.SETUP_TIMEOUT_S)
+    found = {r[0]: r for r in rows}
+    missing = [v for v in (a, b) if v not in found]
+    if missing:
+        return _err(f"No rows where {group} is {', '.join(repr(v) for v in missing)}. Check the exact values.")
+    (_, n1, x1, y1), (_, n2, x2, y2) = found[a], found[b]
+    if rate:
+        test, label = stats.proportions(x1, n1, x2, n2), "pct"
+        p_value, diff = (test[1] if test else None), round(y1 - y2, 4)
+    else:
+        test, label = stats.welch(n1, float(x1 or 0), y1, n2, float(x2 or 0), y2), "mean"
+        p_value, diff = (test[2] if test else None), round(float(x1 or 0) - float(x2 or 0), 4)
+    out_cols = ["group", "rows", label, "difference", "p_value"]
+    out_rows = [[a, n1, y1 if rate else x1, diff, None if p_value is None else round(p_value, 6)],
+                [b, n2, y2 if rate else x2, None, None]]
+    purpose = args.get("purpose") or f"Is the {label} of {raw} different for {group} {a} and {b}?"
+    qid = _receipt(db, session_id, sql, purpose, out_cols, out_rows, False, [dataset])
+    method = ("two-proportion z-test" if rate else "Welch's t-test")
+    return _ok(id=qid, columns=out_cols, rows=out_rows, test=method,
+               verdict=stats.verdict(p_value, n1, n2), note=UNTRUSTED, cite=f"Cite numbers from this result as [{qid}].")
+
+
+@_tool("merge")
+def merge(args, **kwargs):
+    db, eng = _get()
+    dataset = args.get("dataset", "")
+    ref = _resolve_table(eng, dataset, args.get("table"))
+    column, into = args.get("column", ""), args.get("into")
+    values = [v for v in (args.get("values") or []) if isinstance(v, str)]
+    if not values or not isinstance(into, str):
+        return _err("Pass values (a list of text values) and into (the value to use instead).")
+    types = dict(eng.schema(engine.sql_ref(ref)))
+    if column not in types:
+        return _err(f"No column '{column}' in {ref}. Columns: {', '.join(types)}")
+    if types[column] != "VARCHAR":
+        return _err(f"Column '{column}' is {types[column]}. Merges work on text columns only.")
+    store.propose_merge(db, dataset, ref, column, values, into)
+    return _ok(status="pending", rule=f"{column}: {', '.join(repr(v) for v in values)} -> {into!r}",
+               next=("Not applied yet. Tell the user to type /grimoire merges approve to apply it to every "
+                     "later query (the file does not change), or /grimoire merges reject to drop it. "
+                     "Until then, queries use the original values."))
 
 
 _CHANGE = re.compile(r"\b(why|drop(ped)?|fell|fall|rose|rise|grew|grow|increase[sd]?|decrease[sd]?|declin\w*|"
@@ -618,7 +607,7 @@ def auto_attach(user_message, session_id=None, cwd=None):
             cols = t["columns"]
             # names longer than 80 characters are cut here (the full name is in grimoire_attach's result)
             shown = ", ".join(engine.cut(c, 80) for c in cols[:60]) + (f", ... ({len(cols)} columns)" if len(cols) > 60 else "")
-            lines.append(f"- {name} is table {_sql_ref(t['table'])} ({t['rows']:,} rows): {shown}")
+            lines.append(f"- {name} is table {engine.sql_ref(t['table'])} ({t['rows']:,} rows): {shown}")
         if result.get("files"):
             lines.append(f"  {result['files']} files in one table; the filename column says which file a row came from.")
         if result.get("skipped_lines"):

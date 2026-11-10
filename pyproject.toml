@@ -1,11 +1,11 @@
 [project]
 name = "grimoire"
-version = "0.24.2"
+version = "0.25.0"
 description = "A Hermes Agent plugin for learning and exploring data with fewer tokens."
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     # 1.4.2 is the first release with Python 3.14 wheels (the Hermes runtime).
     # 2.0.0 ships cp311 wheels only, so stay below 2 until that changes.
-    "duckdb>=1.4.2,<2",
+    "duckdb>=1.4.2,<3",
 ]

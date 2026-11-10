@@ -75,8 +75,7 @@ def summary():
     datasets = []
     added = dict(db.execute("SELECT name, attached_at FROM datasets").fetchall())
     for name, path, kind in store.datasets(db):
-        used = db.execute("SELECT count(*) FROM queries WHERE instr(',' || coalesce(datasets, '') || ',', "
-                          "',' || ? || ',') > 0", (name,)).fetchone()[0]
+        used = db.execute(f"SELECT count(*) FROM queries WHERE {store.READS}", (name,)).fetchone()[0]
         datasets.append({
             "name": name, "path": path, "kind": kind, "added_at": added.get(name),
             "rows": store.get_json(db, f"rows:{name}", None), "queries": used,
@@ -211,7 +210,7 @@ def columns(name: str):
     try:
         with _page_engine(db, name) as eng:
             return {"tables": [{"table": ref, "columns": [{"name": c, "type": t, "kind": builder.kind(t)}
-                                                          for c, t in eng.schema(tools._sql_ref(ref))]}
+                                                          for c, t in eng.schema(engine.sql_ref(ref))]}
                                for ref in eng.tables(name)]}
     except engine.EngineError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -228,7 +227,7 @@ def chart(body: dict = Body(...)):
             ref = body.get("table") or refs[0]
             if not isinstance(ref, str) or ref not in refs:
                 raise HTTPException(400, f"No table {ref} in {name}.")
-            table = tools._sql_ref(ref)
+            table = engine.sql_ref(ref)
             sql, purpose = builder.build(table, dict(eng.schema(table)), body)
             cols, rows, truncated = eng.query(sql)
     except (engine.EngineError, builder.BuildError) as exc:

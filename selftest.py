@@ -750,6 +750,16 @@ def test_review_fixes(tmp, db):
     call(tools.attach, path=str(fold), name="monthsr")
     tools.setup(db=db, eng=None)
     assert call(tools.query, sql="SELECT sum(v) FROM monthsr")["rows"] == [[3]]
+    # C2-11: a new file that takes a gone file's name does not inherit its merges
+    (d / "gone2").mkdir(exist_ok=True)
+    (d / "gone2" / "shop.csv").write_text("r\nNorth\nnorth\n")
+    nm = call(tools.attach, path=str(d / "gone2" / "shop.csv"), name="shopx")["dataset"]
+    store.save_merge(db, nm, nm, "r", ["north"], "North")
+    (d / "gone2" / "shop.csv").unlink()
+    (d / "new2").mkdir(exist_ok=True)
+    (d / "new2" / "shop.csv").write_text("r\nnorth\n")
+    assert call(tools.attach, path=str(d / "new2" / "shop.csv"), name="shopx").get("merges") is None
+    assert store.merges(db, "shopx") == {}
     # C-7: only bracketed ids are citations
     assert tools.check_reply("Apple's Q3 revenue rose 12%.", "never-used") == ""
     # C-8 is covered in test_data_plugin (regions_2). C-9: a deleted file does not break other attaches
