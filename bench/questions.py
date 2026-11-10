@@ -23,29 +23,36 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July", "Augus
 
 
 def truth(path):
-    """{question key: (numbers that must appear, words that must appear)}."""
-    rows = list(csv.DictReader(open(path, newline="")))
-    paid = [r for r in rows if r["amount_cents"]]
-    dollars = lambda rs: sum(int(r["amount_cents"]) for r in rs) / 100
-    regions = defaultdict(list)
-    for r in paid:
-        regions[r["region"].strip().lower()].append(r)
+    """{question key: (numbers that must appear, words that must appear)}. One streaming pass, exact cents,
+    so a 10-million-row file needs little memory."""
+    rows = missing = paid_n = paid_cents = 0
+    region_cents = defaultdict(int)
     units = Counter()
-    for r in rows:
-        units[r["category"]] += int(r["units"])
+    month_cents = defaultdict(int)
+    customers = set()
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            rows += 1
+            units[r["category"]] += int(r["units"])
+            customers.add(r["customer_id"])
+            if not r["amount_cents"]:
+                missing += 1
+                continue
+            cents = int(r["amount_cents"])
+            paid_n += 1
+            paid_cents += cents
+            region_cents[r["region"].strip().lower()] += cents
+            if r["order_date"]:
+                month_cents[int(r["order_date"][5:7])] += cents
     cat, n_units = units.most_common(1)[0]
-    months = defaultdict(list)
-    for r in paid:
-        if r["order_date"]:
-            months[int(r["order_date"][5:7])].append(r)
-    best = max(months, key=lambda m: dollars(months[m]))
+    best = max(month_cents, key=month_cents.get)
     return {
-        "rows": ([len(rows)], []),
-        "revenue": ([dollars(paid)], []),
-        "regions": ([dollars(v) for v in regions.values()], []),
+        "rows": ([rows], []),
+        "revenue": ([paid_cents / 100], []),
+        "regions": ([c / 100 for c in region_cents.values()], []),
         "units": ([n_units], [cat]),
-        "aov": ([dollars(paid) / len(paid)], []),
-        "missing": ([len(rows) - len(paid)], []),
-        "month": ([dollars(months[best])], [MONTHS[best - 1]]),
-        "customers": ([len({r["customer_id"] for r in rows})], []),
+        "aov": ([paid_cents / 100 / paid_n], []),
+        "missing": ([missing], []),
+        "month": ([month_cents[best] / 100], [MONTHS[best - 1]]),
+        "customers": ([len(customers)], []),
     }
