@@ -14,7 +14,9 @@ jobs:
           - python: "3.11"  # the floor in pyproject.toml
             duckdb: "duckdb==1.4.2"  # the floor
           - python: "3.13"
-            duckdb: "duckdb<2"  # the newest allowed
+            duckdb: "duckdb>=1.5,<2"  # the last 1.x
+          - python: "3.13"
+            duckdb: "duckdb>=2,<3"  # the newest allowed
     steps:
       - uses: actions/checkout@v4
         with:

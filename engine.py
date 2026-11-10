@@ -8,13 +8,16 @@ Safety model:
 - Only read statements are accepted, results are capped, and slow queries are interrupted.
 """
 
+import csv
 import datetime
 import decimal
 import glob
 import math
 import os
 import re
+import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 import uuid
@@ -61,6 +64,11 @@ def cut(value, limit=60):
     if not isinstance(value, str) or len(value) <= limit:
         return value
     return value[: limit - 1] + "…"
+
+
+def sql_ref(ref):
+    """A table reference for SQL: 'shop' -> "shop", 'db.orders' -> "db"."orders"."""
+    return ".".join(ident(part) for part in ref.split(".", 1))
 
 
 def ident(name):
@@ -151,6 +159,7 @@ class Engine:
         self._rejects = {}  # (path, mtime, size) -> (count, first rejected lines)
         self._opened = {}   # dataset name -> (path, mtime, size) when its view or copy was built
         self._widen = {}    # (path, mtime, size) -> {column: type} for whole-number columns with later decimals
+        self._sqlite = {}   # (path, mtime, size) -> (temp folder, exported tables) for SQLite files
         self._con = None
         # ponytail: one lock for all sessions; per-connection cursors if gateway concurrency hurts.
         self._lock = threading.RLock()
@@ -283,7 +292,17 @@ class Engine:
             if not os.path.isfile(path) and not (is_many(path) and files_of(path)):
                 continue  # the file was deleted or moved: drop its table, keep every other dataset working
             if kind == "sqlite":
-                tables[dataset] = _copy_sqlite(con, dataset, path)
+                key = _file_key(path)
+                if key not in self._sqlite:  # export once per file version; every rebuild only reloads the CSVs
+                    for old in [k for k in self._sqlite if k[0] == path]:  # an older version of this file
+                        shutil.rmtree(self._sqlite.pop(old)[0], ignore_errors=True)
+                    folder = tempfile.mkdtemp(prefix="grimoire-sqlite-")
+                    try:
+                        self._sqlite[key] = (folder, _export_sqlite(path, folder))
+                    except Exception:
+                        shutil.rmtree(folder, ignore_errors=True)
+                        raise
+                tables[dataset] = _load_sqlite(con, dataset, self._sqlite[key][1])
                 for ref in tables[dataset]:
                     _merge_in_place(con, ref, merges)
                 continue
@@ -679,8 +698,12 @@ def _merge_in_place(con, ref, merges):
         con.execute(f"UPDATE {target} SET {ident(col)} = {_case(col, mapping)}")
 
 
-def _copy_sqlite(con, dataset, path):
-    """Copy SQLite tables into DuckDB with the stdlib reader (DuckDB's sqlite extension needs a download)."""
+_NULL = "\ue000"  # stands for NULL in the export; a private-use character no real text holds
+
+
+def _export_sqlite(path, folder):
+    """Write each SQLite table to a CSV in folder with the stdlib reader. Returns [(table, csv, [(col, type)])].
+    DuckDB's own sqlite extension would need a download at run time, which Grimoire never does."""
     if os.path.getsize(path) > MAX_SQLITE_BYTES:
         raise EngineError(f"This SQLite file is over {MAX_SQLITE_BYTES // 1024**3} GB. "
                           "Export the tables you need to Parquet or CSV and attach those.")
@@ -691,23 +714,35 @@ def _copy_sqlite(con, dataset, path):
         names = [r[0] for r in src.execute(
             "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )]
-        con.execute(f"CREATE SCHEMA {ident(dataset)}")
-        refs = []
-        for name in names:
+        out = []
+        for i, name in enumerate(names):
             cur = src.execute(f"SELECT * FROM {ident(name)}")
             cols = [d[0] for d in cur.description]
-            target = f"{ident(dataset)}.{ident(name)}"
-            col_defs = ", ".join(f"{ident(c)} {t}" for c, t in zip(cols, _sqlite_types(src, name, cols)))
-            con.execute(f"CREATE TABLE {target} ({col_defs})")
-            marks = ", ".join("?" for _ in cols)
-            batch = cur.fetchmany(10000)
-            while batch:
-                con.executemany(f"INSERT INTO {target} VALUES ({marks})", [list(r) for r in batch])
-                batch = cur.fetchmany(10000)
-            refs.append(f"{dataset}.{name}")
-        return refs
+            types = _sqlite_types(src, name, cols)
+            target = os.path.join(folder, f"t{i}.csv")
+            with open(target, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh, lineterminator="\n")
+                for row in cur:
+                    w.writerow([_NULL if v is None else v.hex() if isinstance(v, bytes) else v for v in row])
+            out.append((name, target, list(zip(cols, types))))
+        return out
     finally:
         src.close()
+
+
+def _load_sqlite(con, dataset, tables):
+    """Create the DuckDB tables from the exported CSVs: one fast read each, then the right type per column."""
+    con.execute(f"CREATE SCHEMA {ident(dataset)}")
+    refs = []
+    for name, target, cols in tables:
+        spec = "{" + ", ".join(f"'c{i}': 'VARCHAR'" for i in range(len(cols))) + "}"
+        cast = {"BIGINT": "CAST(c{0} AS BIGINT)", "DOUBLE": "CAST(c{0} AS DOUBLE)", "BLOB": "unhex(c{0})"}
+        select = ", ".join(f"{cast.get(t, 'c{0}').format(i)} AS {ident(c)}" for i, (c, t) in enumerate(cols)) or "*"
+        con.execute(f"CREATE TABLE {ident(dataset)}.{ident(name)} AS SELECT {select} FROM read_csv({literal(target)}, "
+                    f"header = false, auto_detect = false, delim = ',', quote = '\"', escape = '\"', "
+                    f"new_line = '\\n', columns = {spec}, nullstr = {literal(_NULL)})")
+        refs.append(f"{dataset}.{name}")
+    return refs
 
 
 def _sqlite_types(src, table, cols):
