@@ -79,7 +79,10 @@ def init(db):
 
 def get_json(db, key, default=None):
     value = get_setting(db, key)
-    return default if value is None else json.loads(value)
+    try:
+        return default if value is None else json.loads(value)
+    except ValueError:
+        return default  # a damaged record reads as "not saved"
 
 
 def set_json(db, key, value):
@@ -111,8 +114,8 @@ READS = "instr(',' || coalesce(datasets, '') || ',', ',' || ? || ',') > 0"  # a 
 
 def _clear_facts(db, name):
     """Delete what Grimoire learned about a file (profile, notes, merges); the saved queries stay."""
-    db.execute("DELETE FROM settings WHERE key IN (?, ?, ?, ?)",
-               (f"issues:{name}", f"shape:{name}", f"health:{name}", f"rows:{name}"))
+    db.execute("DELETE FROM settings WHERE key IN (?, ?, ?, ?, ?)",
+               (f"issues:{name}", f"shape:{name}", f"health:{name}", f"rows:{name}", f"scan:{name}"))
     return {table: db.execute(f"DELETE FROM {table} WHERE dataset = ?", (name,)).rowcount
             for table in ("columns", "merges", "pending_merges")}
 

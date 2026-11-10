@@ -160,6 +160,8 @@ class Engine:
         self._opened = {}   # dataset name -> (path, mtime, size) when its view or copy was built
         self._widen = {}    # (path, mtime, size) -> {column: type} for whole-number columns with later decimals
         self._sqlite = {}   # (path, mtime, size) -> (temp folder, exported tables) for SQLite files
+        self._unfinished = set()  # file versions whose type read timed out
+        self._left_out = {}       # dataset -> why the last rebuild could not open it
         self._con = None
         # ponytail: one lock for all sessions; per-connection cursors if gateway concurrency hurts.
         self._lock = threading.RLock()
@@ -177,10 +179,45 @@ class Engine:
         """merges: {(table, column): {from_value: to_value}} applied to every query of this dataset.
         Files in private folders (credentials, app data) are refused unless allow_private; every file a
         folder or pattern expands to is checked, after links are resolved."""
+        real, kind, dataset = self._check(path, name, allow_private)
+        return self._add(real, kind, dataset, merges, path)
+
+    def attach_all(self, items, allow_private=False):
+        """Open many saved files with one rebuild, after a restart. items: [(path, name, merges)].
+        A file that is gone or broken is left out, and every other file still opens."""
+        with self._lock:
+            for path, name, merges in items:
+                try:
+                    real, kind, dataset = self._check(path, name, allow_private)
+                except EngineError:
+                    continue
+                self._sources[dataset] = (real, kind)
+                self._merges[dataset] = merges or {}
+            if self._sources:
+                self._rebuild()
+
+    def _check(self, path, name, allow_private):
+        """(real path, kind, dataset name) of a file, folder or pattern; EngineError when it cannot be opened."""
         expanded = os.path.expanduser(str(path))
-        if is_many(expanded):
-            return self._attach_many(expanded, name, merges, allow_private)
         real = os.path.realpath(expanded)
+        if is_many(expanded):
+            folder = guard.private_folder(real)  # the pattern's own folder first: do not say if files match in there
+            if folder and not allow_private:
+                raise EngineError(guard.private_error(folder))
+            try:
+                files = files_of(real)
+            except PermissionError as exc:
+                raise EngineError(f"macOS or your system blocked access to {expanded}.") from exc
+            if not files:
+                raise EngineError(f"No data files match {expanded}.")
+            for f in files:
+                folder = guard.private_folder(f)
+                if folder and not allow_private:
+                    raise EngineError(guard.private_error(folder))
+            kinds = {kind_of(f) for f in files}
+            if len(kinds) != 1 or None in kinds or "sqlite" in kinds:
+                raise EngineError("A folder or pattern must hold files of one kind: all CSV, all JSON or all Parquet.")
+            return real, kinds.pop(), dataset_name(expanded, name)
         folder = guard.private_folder(real)  # before any file test: the answer must not say whether it exists
         if folder and not allow_private:
             raise EngineError(guard.private_error(folder))
@@ -203,24 +240,7 @@ class Engine:
                 f"Unsupported file type '{''.join(Path(real).suffixes)}'. "
                 "Use CSV, TSV, JSON, NDJSON (also .gz or .zst), Parquet or SQLite."
             )
-        return self._add(real, kind, dataset_name(real, name), merges, path)
-
-    def _attach_many(self, pattern, name, merges, allow_private=False):
-        real = os.path.realpath(pattern)
-        try:
-            files = files_of(real)
-        except PermissionError as exc:
-            raise EngineError(f"macOS or your system blocked access to {pattern}.") from exc
-        if not files:
-            raise EngineError(f"No data files match {pattern}.")
-        for f in files:
-            folder = guard.private_folder(f)
-            if folder and not allow_private:
-                raise EngineError(guard.private_error(folder))
-        kinds = {kind_of(f) for f in files}
-        if len(kinds) != 1 or None in kinds or "sqlite" in kinds:
-            raise EngineError("A folder or pattern must hold files of one kind: all CSV, all JSON or all Parquet.")
-        return self._add(real, kinds.pop(), dataset_name(pattern, name), merges, pattern)
+        return real, kind, dataset_name(real, name)
 
     def _add(self, real, kind, dataset, merges, shown):
         with self._lock:
@@ -229,14 +249,16 @@ class Engine:
             self._merges[dataset] = merges or {}
             try:
                 self._rebuild()
+                problem = self._left_out.get(dataset)
             except Exception as exc:
-                if previous[0] is None:
-                    self._sources.pop(dataset)
-                    self._merges.pop(dataset)
-                else:
+                problem = str(exc)
+            if problem is not None:  # put the old state back, then say why
+                self._sources.pop(dataset, None)
+                self._merges.pop(dataset, None)
+                if previous[0] is not None:
                     self._sources[dataset], self._merges[dataset] = previous
                 self._rebuild()
-                raise EngineError(f"Cannot read {shown}: {exc}") from exc
+                raise EngineError(f"Cannot read {shown}: {problem}")
         return dataset, kind
 
     def fresh(self, dataset):
@@ -263,14 +285,17 @@ class Engine:
         with self._lock:
             if dataset not in self._sources:
                 raise EngineError(f"Unknown dataset '{dataset}'. Attach it first.")
-            previous = self._merges.get(dataset)
+            source, previous = self._sources[dataset], self._merges.get(dataset)
             self._merges[dataset] = merges
             try:
                 self._rebuild()
+                problem = self._left_out.get(dataset)
             except Exception as exc:
-                self._merges[dataset] = previous
+                problem = str(exc)
+            if problem is not None:
+                self._sources[dataset], self._merges[dataset] = source, previous
                 self._rebuild()
-                raise EngineError(f"Cannot apply the merge: {exc}") from exc
+                raise EngineError(f"Cannot apply the merge: {problem}")
 
     def merges(self, dataset):
         return dict(self._merges.get(dataset) or {})
@@ -290,52 +315,29 @@ class Engine:
             "memory_limit": _memory_limit(self._memory_share),
         })
         con.execute("SET enable_progress_bar = false")
-        tables, readable = {}, []
+        tables, readable, left_out = {}, [], {}
         for dataset, (path, kind) in self._sources.items():
-            merges = self._merges.get(dataset) or {}
             if not os.path.isfile(path) and not (is_many(path) and files_of(path)):
-                continue  # the file was deleted or moved: drop its table, keep every other dataset working
-            if kind == "sqlite":
-                key = _file_key(path)
-                if key not in self._sqlite:  # export once per file version; every rebuild only reloads the CSVs
-                    for old in [k for k in self._sqlite if k[0] == path]:  # an older version of this file
-                        shutil.rmtree(self._sqlite.pop(old)[0], ignore_errors=True)
-                    folder = tempfile.mkdtemp(prefix="grimoire-sqlite-")
-                    try:
-                        self._sqlite[key] = (folder, _export_sqlite(path, folder))
-                    except Exception:
-                        shutil.rmtree(folder, ignore_errors=True)
-                        raise
-                tables[dataset] = _load_sqlite(con, dataset, self._sqlite[key][1])
-                for ref in tables[dataset]:
-                    _merge_in_place(con, ref, merges)
+                left_out[dataset] = "the file is gone"
                 continue
-            files = files_of(path)
-            target = _list_literal(files) if is_many(path) else literal(path)
-            source = f"{READERS[kind]}({target}"
-            if is_many(path):
-                source += ", union_by_name = true, filename = true"  # a filename column says which file
-            if kind == "csv":
-                # Skip malformed lines instead of guessing one text column; the skipped lines are reported.
-                source += ", ignore_errors = true"
-                key = _file_key(path)
-                if key not in self._rejects:
-                    self._rejects[key] = _with_timeout(con, SETUP_TIMEOUT_S, _scan_files, con, files, is_many(path))
-            key = _file_key(path)
-            if key not in self._widen:
-                try:
-                    self._widen[key] = _with_timeout(con, SETUP_TIMEOUT_S, _late_decimals, con, kind, source + ")")
-                except Exception:
-                    self._widen[key] = {}  # ponytail: a timeout keeps the sampled types; such files are huge
-            source += _pin_types(con, kind, source + ")", self._widen[key])
-            source += ")"
-            own = merges_for(merges, dataset)
-            if own:
-                con.execute(f"CREATE VIEW {ident(dataset + '_raw')} AS SELECT * FROM {source}")
-            con.execute(f"CREATE VIEW {ident(dataset)} AS {_merged_select(con, source, own)}")
-            con.execute(f"SELECT * FROM {ident(dataset)} LIMIT 0")  # fail now on a bad file
-            tables[dataset] = [dataset]
+            try:
+                tables[dataset], files = self._open(con, dataset, path, kind, self._merges.get(dataset) or {})
+            except Exception as exc:
+                left_out[dataset] = str(exc)
+                for half_made in (f"DROP VIEW IF EXISTS {ident(dataset)}", f"DROP VIEW IF EXISTS {ident(dataset + '_raw')}",
+                                  f"DROP SCHEMA IF EXISTS {ident(dataset)} CASCADE"):
+                    try:
+                        con.execute(half_made)
+                    except Exception:
+                        pass
+                continue
             readable.extend(files)
+        # A file that is gone or broke is left out, so one bad file never blocks the others. It is no longer
+        # an open dataset (the catalog lists it as missing); naming it again attaches it again.
+        for dataset in left_out:
+            self._sources.pop(dataset)
+            self._merges.pop(dataset, None)
+        self._left_out = left_out
         con.execute("SET allowed_paths = ?", [readable])
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
@@ -343,6 +345,74 @@ class Engine:
         old, self._con, self._tables = self._con, con, tables
         if old is not None:
             old.close()
+
+    def _open(self, con, dataset, path, kind, merges):
+        """Create one dataset's tables or view in con. Returns (table references, files a query may read)."""
+        if kind == "sqlite":
+            key = _file_key(path)
+            if key not in self._sqlite:  # export once per file version; every rebuild only reloads the CSVs
+                for old in [k for k in self._sqlite if k[0] == path]:  # an older version of this file
+                    shutil.rmtree(self._sqlite.pop(old)[0], ignore_errors=True)
+                folder = tempfile.mkdtemp(prefix="grimoire-sqlite-")
+                try:
+                    self._sqlite[key] = (folder, _export_sqlite(path, folder))
+                except Exception:
+                    shutil.rmtree(folder, ignore_errors=True)
+                    raise
+            refs = _load_sqlite(con, dataset, self._sqlite[key][1])
+            for ref in refs:
+                _merge_in_place(con, ref, merges)
+            return refs, []
+        files = files_of(path)
+        target = _list_literal(files) if is_many(path) else literal(path)
+        source = f"{READERS[kind]}({target}"
+        if is_many(path):
+            source += ", union_by_name = true, filename = true"  # a filename column says which file
+        key = _file_key(path)
+        if kind == "csv":
+            # Skip malformed lines instead of guessing one text column; the skipped lines are reported.
+            source += ", ignore_errors = true"
+            if key not in self._rejects:
+                self._rejects[key] = _with_timeout(con, SETUP_TIMEOUT_S, _scan_files, con, files, is_many(path))
+        if key not in self._widen:
+            try:
+                self._widen[key] = _with_timeout(con, SETUP_TIMEOUT_S, _late_decimals, con, kind, source + ")")
+            except Exception:
+                self._widen[key] = {}  # ponytail: a timeout keeps the sampled types; such files are huge
+                self._unfinished.add(key)  # not saved, so the next start tries the read again
+        source += _pin_types(con, kind, source + ")", self._widen[key])
+        source += ")"
+        own = merges_for(merges, dataset)
+        if own:
+            con.execute(f"CREATE VIEW {ident(dataset + '_raw')} AS SELECT * FROM {source}")
+        con.execute(f"CREATE VIEW {ident(dataset)} AS {_merged_select(con, source, own)}")
+        con.execute(f"SELECT * FROM {ident(dataset)} LIMIT 0")  # fail now on a bad file
+        return [dataset], files
+
+    def scan(self, dataset):
+        """What the full reads of a dataset's files found (skipped lines, columns that need a wider type) and
+        the file version they belong to, as plain data to save. A restart then does not read the files again."""
+        path, _kind = self._sources[dataset]
+        key = _file_key(path)
+        return {"version": repr(key), "rejects": self._rejects.get(key),
+                "widen": None if key in self._unfinished else self._widen.get(key)}
+
+    def load_scan(self, path, saved):
+        """Take a saved scan back when the files have not changed since. path: as in datasets."""
+        try:
+            key = _file_key(path)
+        except OSError:
+            return  # the file is gone
+        try:  # the record comes from the plugin database: take only the shapes this engine writes
+            if saved.get("version") != repr(key):
+                return
+            if saved.get("rejects") is not None:
+                count, first = saved["rejects"]
+                self._rejects[key] = (int(count), [(str(a), str(b), str(c)) for a, b, c in first][:MAX_REJECTS])
+            if saved.get("widen") is not None:  # the type goes into the SQL that builds the view: only DOUBLE
+                self._widen[key] = {str(c): "DOUBLE" for c, t in saved["widen"].items() if t == "DOUBLE"}
+        except (AttributeError, TypeError, ValueError):
+            pass  # a damaged record: the files are read again
 
     def query(self, sql, timeout=TIMEOUT_S):
         """Run one read statement. Returns (columns, rows, truncated)."""
@@ -646,7 +716,7 @@ def _pin_types(con, kind, source, widen):
     if not widen:
         return ""
     if kind == "csv":
-        return ", types = {" + ", ".join(f"{literal(c)}: '{t}'" for c, t in widen.items()) + "}"
+        return ", types = {" + ", ".join(f"{literal(c)}: {literal(t)}" for c, t in widen.items()) + "}"
     cols = [(c, widen.get(c, t)) for c, t, *_ in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()]
     return ", columns = {" + ", ".join(f"{literal(c)}: {literal(t)}" for c, t in cols) + "}"
 

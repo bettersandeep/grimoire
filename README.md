@@ -69,6 +69,7 @@ Under the answer, Grimoire adds its check:
 | `Not from a cited query: 137` | The number is in another result of this chat, but not in a query the answer cites, so it may be a coincidence |
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
+| `Watch out: 12.5% is written as a rise, but the result is negative` | The answer says "grew" or "up", and the query result is below zero |
 | `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
 
 A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.
@@ -222,7 +223,7 @@ Run the benchmark yourself with `bench/make_data.py` and `bench/run.py`.
 | Answers with SQL | DuckDB in memory; the model sees table names, columns and small results, never the rows |
 | Saves receipts | Every query, its SQL and result, with an id the answer cites |
 | Checks numbers | Which numbers trace to query results, which come from simple arithmetic, and which have no source |
-| Checks the method | Rows a filter left out, one value spelled two ways, an incomplete last period, an average of averages, a join that counts rows twice, a rate compared across periods with very different row counts, and the clock that day and hour buckets use |
+| Checks the method | Rows a filter left out (also in joins and WITH queries), a number written as a rise when the result is negative, one value spelled two ways, an incomplete last period, an average of averages, a join that counts rows twice, a rate compared across periods with very different row counts, and the clock that day and hour buckets use |
 | Finds data problems | See [Data health](#data-health); a score out of 100 with every point explained |
 | Column statistics | Quantiles, outliers, top values, rows per month |
 | Shape of the data | Dimensions, metrics and time columns; metrics that move together; ID columns that join to other files |
@@ -240,7 +241,7 @@ The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_que
 - **Your files never change.** Merge rules apply inside Grimoire only.
 - **SQLite files** are copied to a temporary folder as CSV, once per file version, and loaded into DuckDB from there.
 - **Reports** are written to `~/.hermes/plugin-data/grimoire/reports/` only when you run `/grimoire report`.
-- **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
+- **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, the first 20 malformed lines of each file, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
 - **Network:** none. Your model provider sees what the model sees, as with any Hermes tool.
 - **Shell commands, background processes, credentials and telemetry:** none.
 - **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (opens a named data file and adds its table and columns; the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the check and, when on, the learning card), `pre_api_request` and `post_api_request` (keep the tool count and input token count of each model call in memory for `/grimoire`; no message content).

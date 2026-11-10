@@ -8,26 +8,13 @@ import calendar
 import datetime
 import re
 
-from . import engine, learning
+from . import engine, learning, sqltree
 
 AUDIT_TIMEOUT_S = 2  # per extra query; a slow check is skipped, the reply is never held up long
 MAX_QUERIES = 3      # audit at most the last 3 cited queries
 
-_TABLE = r'("?[\w]+"?(?:\."?[\w]+"?)?)'
-_SIMPLE_FROM = re.compile(rf"^FROM\s+{_TABLE}(?:\s+(?:AS\s+)?\w+)?$", re.I)
-_JOIN = re.compile(
-    rf"^FROM\s+{_TABLE}(?:\s+(?:AS\s+)?(\w+))?\s+(?:(?:LEFT|RIGHT|INNER|FULL)\s+)?(?:OUTER\s+)?JOIN\s+{_TABLE}"
-    r"(?:\s+(?:AS\s+)?(\w+))?\s+(?:USING\s*\(\s*\"?(\w+)\"?\s*\)|ON\s+(\w+)\.\"?(\w+)\"?\s*=\s*(\w+)\.\"?(\w+)\"?)\s*$",
-    re.I)
-_MONTH = re.compile(r"date_trunc\(\s*'month'\s*,\s*\"?(\w+)\"?\s*\)|strftime\(\s*\"?(\w+)\"?\s*,\s*'%Y-%m'\s*\)", re.I)
-_YEAR = re.compile(r"date_trunc\(\s*'year'\s*,\s*\"?(\w+)\"?\s*\)|\byear\(\s*\"?(\w+)\"?\s*\)", re.I)
-_DAY = re.compile(r"date_trunc\(\s*'(?:day|hour|week)'\s*,\s*\"?(\w+)\"?\s*\)|\b(?:hour|dayname|dayofweek|isodow)\(\s*\"?(\w+)\"?\s*\)"
-                  r"|CAST\(\s*\"?(\w+)\"?\s+AS\s+DATE\s*\)|\"?(\w+)\"?::DATE|strftime\(\s*\"?(\w+)\"?\s*,\s*'[^']*%[dHa]", re.I)
-# A rate: divided by a count or sum (not by 100 for units), or named like one.
-_RATIO = re.compile(r"/\s*\(?\s*(?:nullif\s*\(\s*)?(?:count|sum)\s*\(|\b(?:pct|percent\w*|share|rate|ratio)\b", re.I)
-_IN = re.compile(r"^(?:CAST\(\s*)?\"?(\w+)\"?(?:\s+AS\s+VARCHAR\s*\))?\s+IN\s*\(((?:\s*'[^',]*'\s*,?)+)\)$", re.I)
-_FACTOR = re.compile(r"[*/]\s*\(?\s*(\d+(?:\.\d+)?)\b(?!\s*\))?|\b(\d+(?:\.\d+)?)\s*\*")
-_NOT_NULL = re.compile(r'^\(?\s*"?(\w+)"?\s+IS\s+NOT\s+NULL\s*\)?$', re.I)
+# a result column named like a rate: pct, conversion_rate, churn_ratio (not "separate" or "duration")
+_RATE_NAME = re.compile(r"(?:^|[^a-z])(?:pct|percent[a-z]*|share|rate|ratio)(?:$|[^a-z])", re.I)
 
 
 def _clause(parts, name):
@@ -39,12 +26,14 @@ _memo = {}  # (sql, files as opened) -> value; a changed file changes the key, s
 
 def _rows(eng, sql):
     """Rows of a small read-only query, remembered per file version; None when it fails or is slow."""
+    if not sql:
+        return None
     key = (sql, tuple(sorted((eng._opened or {}).items())))
     if key not in _memo:
         try:
             _memo[key] = eng.query(sql, AUDIT_TIMEOUT_S)[1]
         except engine.EngineError:
-            return None
+            _memo[key] = None  # also remembered: a count that is too slow is not tried again on every reply
         if len(_memo) > 512:
             _memo.pop(next(iter(_memo)))
     return _memo[key]
@@ -57,13 +46,17 @@ def _value(eng, sql):
 
 
 def _plain(cond):
-    """A WHERE condition in plain words, for the common shapes; else the condition itself, shortened."""
-    m = _IN.match(cond.strip())
-    if m:  # CAST(region AS VARCHAR) IN ('North', 'South'), as grimoire_compare writes it
-        return f"{m.group(1)} is " + " or ".join(v.strip().strip("'") for v in m.group(2).split(","))
-    pieces = re.split(r"\s+AND\s+", cond.strip(), flags=re.I)
-    empty = [m.group(1) for m in (_NOT_NULL.match(p) for p in pieces) if m]
-    if empty and len(empty) == len(pieces):
+    """A WHERE condition in plain words, for the common shapes; else the condition as written, shortened."""
+    tree = sqltree.parse(f"SELECT 1 WHERE {cond}")
+    where = tree.where if tree else None
+    if where and where.get("type") == "COMPARE_IN":  # CAST(region AS VARCHAR) IN ('North', 'South'), as grimoire_compare writes it
+        first, *rest = where["children"]
+        name, values = sqltree.column(first.get("child", first)), [sqltree.constant(v) for v in rest]
+        if name and all(isinstance(v, str) for v in values):
+            return f"{name} is " + " or ".join(values)
+    pieces = where["children"] if where and where.get("type") == "CONJUNCTION_AND" else [where] if where else []
+    empty = [sqltree.column(p["children"][0]) for p in pieces if p.get("type") == "OPERATOR_IS_NOT_NULL"]
+    if pieces and len(empty) == len(pieces) and all(empty):
         return "empty " + " or ".join(empty)
     text = cond.strip()  # already one space between words, and quoted values as written (learning.clauses)
     return text if len(text) <= 80 else text[:77] + "..."
@@ -71,54 +64,81 @@ def _plain(cond):
 
 def assumptions(q, eng):
     """Short sentences about what a query left out or cut off."""
-    parts = learning.clauses(q["sql"])
-    names = [n for n, _ in parts]
+    tree = sqltree.parse(q["sql"])
     out = []
-    where, frm = _clause(parts, "WHERE"), _clause(parts, "FROM")
-    if where and frm:
+    where = _clause(learning.clauses(q["sql"]), "WHERE")
+    if where:
         cond = where[len("WHERE"):].strip()
-        m = _SIMPLE_FROM.match(frm) if "WITH" not in names else None
-        total = kept = None
-        if m:  # one plain table: count what the filter removed (two small counts)
-            total = _value(eng, f"SELECT count(*) FROM {m.group(1)}")
-            kept = _value(eng, f"SELECT count(*) FROM {m.group(1)} WHERE {cond}")
+        # the same FROM, joins and WITH, counted with and without the filter (two small counts)
+        total = _value(eng, tree.count_sql(where=False)) if tree else None
+        kept = _value(eng, tree.count_sql()) if tree else None
         if total is not None and kept is not None:
             if total > kept:
                 out.append(f"left out {total - kept:,} of {total:,} rows ({_plain(cond)})")
         else:
             out.append(f"keeps only rows where {_plain(cond)}")
-    limit = _clause(parts, "LIMIT")
-    if limit and "ORDER BY" in names and re.match(r"LIMIT\s+\d+$", limit, re.I):
-        n = int(limit.split()[1])
-        if n > 1:
-            out.append(f"shows the top {n} only")
+    if tree and tree.order and (tree.limit or 0) > 1:
+        out.append(f"shows the top {tree.limit} only")
     if q.get("truncated"):
         out.append(f"the result was cut at {len(q['rows'])} rows")
-    zone = _time_zone(q, eng)
+    zone = _time_zone(q, eng, tree)
     if zone:
         out.append(zone)
     return out
 
 
-def _constants(select):
-    """Numbers the SQL multiplies or divides by, other than unit factors (10, 100, 1000 ...) and 1 or 2."""
+def _unit_factor(v):
+    """True for 0, 1, 2 and powers of ten: unit changes and halves are not assumptions."""
+    return v in (0, 1, 2) or (v == int(v) and str(int(v)).strip("0") == "1")
+
+
+def _constants(items):
+    """Numbers that the SELECT items (tree nodes) multiply or divide by, as written, other than unit factors.
+    A bucket width is not one: floor(x / 5) * 5."""
     found = []
-    buckets = set(re.findall(r"/\s*(\d+(?:\.\d+)?)\s*\)\s*\*\s*\1\b", select))  # floor(x / 5) * 5: a bucket width
-    for m in _FACTOR.finditer(select):
-        raw = m.group(1) or m.group(2)
-        if raw in buckets:
+    widths = set()
+    for name, call in sqltree.calls(items, subqueries=False):
+        if name == "*":  # floor(x / w) * w
+            for side, other in (sqltree.args(call), sqltree.args(call)[::-1]):
+                w = sqltree.constant(other)
+                inner = [sqltree.constant(sqltree.args(c)[-1]) for n, c in sqltree.calls(side) if n == "/"]
+                if w is not None and w in inner:
+                    widths.add(w)
+    for name, call in sqltree.calls(items, subqueries=False):
+        if name not in ("*", "/") or len(sqltree.args(call)) != 2:
             continue
-        v = float(raw)
-        if v in (0, 1, 2) or (v == int(v) and str(int(v)).strip("0") == "1"):
-            continue  # unit changes and halves are not assumptions
-        if raw not in found:
-            found.append(raw)
+        for child in sqltree.args(call)[1:] if name == "/" else sqltree.args(call):
+            v = sqltree.constant(child)
+            if isinstance(v, bool) or not isinstance(v, (int, sqltree.Decimal)) or v in widths or _unit_factor(v):
+                continue
+            if str(v) not in found:
+                found.append(str(v))
     return found[:3]
 
 
-def _time_zone(q, eng):
+def _buckets(tree, units, functions, formats):
+    """Columns that the query puts into time buckets: date_trunc with one of units, one of functions, or
+    strftime with a format that holds one of formats."""
+    cols = []
+    for name, call in sqltree.calls(tree.tree):
+        args = sqltree.args(call)
+        if name == "date_trunc" and len(args) == 2 and str(sqltree.constant(args[0])).lower() in units:
+            cols.append(sqltree.column(args[1]))
+        elif name in functions and args:
+            cols.append(sqltree.column(args[0]))
+        elif name == "strftime" and len(args) == 2 and isinstance(sqltree.constant(args[1]), str):
+            if any(f(sqltree.constant(args[1])) for f in formats):
+                cols.append(sqltree.column(args[0]))
+    return [c for c in cols if c]
+
+
+def _time_zone(q, eng, tree):
     """Say which clock day and hour buckets use, when the query buckets a timestamp by day or hour."""
-    cols = {next(g for g in m.groups() if g) for m in _DAY.finditer(q["sql"])}
+    if not tree:
+        return None
+    cols = set(_buckets(tree, ("day", "hour", "week"), ("hour", "dayname", "dayofweek", "isodow"),
+                        [lambda f: re.search(r"%[dHa]", f)]))
+    cols |= {sqltree.column(d.get("child")) for d in sqltree._dicts(tree.tree) if sqltree.cast_to(d) == "DATE"} - {None}
     for name in q.get("datasets") or []:
         try:
             types = dict(eng.schema(engine.ident(name)))
@@ -134,43 +154,49 @@ def _time_zone(q, eng):
     return None
 
 
+def _is_rate(tree, columns):
+    """True when the outer SELECT divides by a count or a sum (not by 100 for units), or names a column like a rate."""
+    for name, call in sqltree.calls(tree.selects, subqueries=False):
+        if name == "/" and any(n in ("count", "count_star", "sum") for n, _ in sqltree.calls(sqltree.args(call)[-1])):
+            return True
+    names = [e.get("alias") or "" for items in tree.selects for e in items] + list(columns or [])
+    return any(_RATE_NAME.search(n) for n in names)
+
+
 def pitfalls(q, eng):
     """Short warnings about mistakes that the SQL or its result make likely."""
-    sql, out = q["sql"], []
-    parts = learning.clauses(sql)
-    outer_select = _clause(parts, "SELECT") or ""
-    inner = sql.replace(outer_select, "", 1)
-    if re.search(r"\bavg\s*\(", outer_select, re.I) and re.search(r"\bavg\s*\(", inner, re.I):
-        out.append("average of averages: groups of different sizes count the same; weight by row count if that matters")
-    frm = _clause(parts, "FROM") or ""
-    j = _JOIN.match(frm)
-    if j:
-        left, right = j.group(1), j.group(3)
-        key_l = j.group(5) or j.group(7)
-        key_r = j.group(5) or j.group(9)
-        dup_l = _value(eng, f'SELECT count(*) - count(DISTINCT "{key_l}") FROM {left}')
-        dup_r = _value(eng, f'SELECT count(*) - count(DISTINCT "{key_r}") FROM {right}')
-        if dup_l and dup_r:
-            out.append(f"the join on {key_l} matches several rows on both sides, so rows can be counted more than once")
+    tree, out = sqltree.parse(q["sql"]), []
+    if tree:
+        averages = lambda part, deep: any(n == "avg" for n, _ in sqltree.calls(part, subqueries=deep))
+        inner = [d for d in sqltree._dicts(tree.tree) if "select_list" in d and d is not tree.node]
+        if averages(tree.select, False) and any(averages(d["select_list"], False) for d in inner):
+            out.append("average of averages: groups of different sizes count the same; weight by row count if that matters")
+        kind, *src = tree.source()
+        if kind == "join":
+            left, _l, right, _r, key_l, key_r = src
+            dup_l = _value(eng, f"SELECT count(*) - count(DISTINCT {engine.ident(key_l)}) FROM {left}")
+            dup_r = _value(eng, f"SELECT count(*) - count(DISTINCT {engine.ident(key_r)}) FROM {right}")
+            if dup_l and dup_r:
+                out.append(f"the join on {key_l} matches several rows on both sides, so rows can be counted more than once")
     variants = _result_variants(q)
     if variants:
         out.append(f"{variants} look like one value spelled differently; combine them with grimoire_merge "
                    "so each total counts once")
-    constants = _constants(outer_select)
+    if not tree:
+        return out
+    constants = _constants(tree.selects)
     if constants:
         out.append(f"uses {', '.join(constants)}, written into the SQL, not taken from the data")
-    for pattern, kind in ((_MONTH, "month"), (_YEAR, "year")):
-        m = pattern.search(sql)
-        if m:
-            column = m.group(1) or m.group(2)
-            warning = _incomplete_period(q, eng, column, kind)
+    months = _buckets(tree, ("month",), (), [lambda f: f == "%Y-%m"])
+    years = _buckets(tree, ("year",), ("year",), [])
+    for column, kind in ([(months[0], "month")] if months else [(years[0], "year")] if years else []):
+        warning = _incomplete_period(q, eng, column, kind)
+        if warning:
+            out.append(warning)
+        if _is_rate(tree, q["columns"]) and len(q["rows"]) >= 2:
+            warning = _changing_base(q, eng, column, kind)
             if warning:
                 out.append(warning)
-            if _RATIO.search(outer_select) and len(q["rows"]) >= 2:
-                warning = _changing_base(q, eng, column, kind)
-                if warning:
-                    out.append(warning)
-            break
     return out
 
 
@@ -195,9 +221,9 @@ def _result_variants(q):
 def _incomplete_period(q, eng, column, kind):
     """Warn when the result includes the last month or year and the data stops before it ends."""
     for name in q.get("datasets") or []:
-        found = _rows(eng, f'SELECT max("{column}"), bool_and(day(try_cast("{column}" AS DATE)) = 1), '
-                           f'bool_and(month(try_cast("{column}" AS DATE)) = 1) '
-                           f'FROM {engine.ident(name)}')
+        c = engine.ident(column)
+        found = _rows(eng, f"SELECT max({c}), bool_and(day(try_cast({c} AS DATE)) = 1), "
+                           f"bool_and(month(try_cast({c} AS DATE)) = 1) FROM {engine.ident(name)}")
         if not found or found[0][0] is None:
             continue  # this dataset has no such column (or the check was slow); try the next
         last, monthly, yearly = found[0]
@@ -220,8 +246,9 @@ def _changing_base(q, eng, column, kind):
     """Warn when a rate or average is compared across periods whose row counts differ a lot.
     The first and last periods are left out: they are often partial, which another check covers."""
     for name in q.get("datasets") or []:
-        counts = _rows(eng, f'SELECT date_trunc(\'{kind}\', "{column}") AS p, count(*) FROM {engine.ident(name)} '
-                            f'WHERE "{column}" IS NOT NULL GROUP BY 1 ORDER BY 1')
+        c = engine.ident(column)
+        counts = _rows(eng, f"SELECT date_trunc('{kind}', {c}) AS p, count(*) FROM {engine.ident(name)} "
+                            f"WHERE {c} IS NOT NULL GROUP BY 1 ORDER BY 1")
         if counts is None:
             continue
         shown = {str(v)[:7 if kind == "month" else 4] for row in q["rows"] for v in row if isinstance(v, str)}
@@ -240,17 +267,10 @@ def verdict(unsourced, warnings):
     return "share with caveats" if warnings else "ready to share"
 
 
-def review(queries, eng, unsourced, loose=(), uncited=()):
+def review(queries, eng, unsourced, caveats=()):
     """Footer lines for the cited queries: (verdict, [lines]). Empty lines when there is nothing to say.
-    loose: numbers that match only by combining two result values; the reader should check how.
-    uncited: numbers found only in a result of the chat that the answer does not cite."""
-    assumed, warned = [], []
-    if uncited:
-        warned.append(f"{' · '.join(dict.fromkeys(uncited))} match another result of this chat, not a query the "
-                      "answer cites, so the match can be chance; cite that query, or compute them again")
-    if loose:
-        warned.append(f"{' · '.join(dict.fromkeys(loose))} only match by combining two values from the result; "
-                      "check how they were worked out, or compute them in SQL")
+    caveats: warnings from the number check (verify.caveats); they come first."""
+    assumed, warned = [], list(caveats)
     for q in queries[-MAX_QUERIES:]:
         assumed += [f"{a} [{q['id']}]" for a in assumptions(q, eng)]
         warned += [f"{w} [{q['id']}]" for w in pitfalls(q, eng)]

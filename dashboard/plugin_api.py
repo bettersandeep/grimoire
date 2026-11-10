@@ -184,6 +184,7 @@ def _page_engine(db, name):
         eng = entry[0]
         if eng is None or eng.datasets[name][0] != paths[name] or not eng.fresh(name) or eng.merges(name) != merges:
             eng = engine.Engine(memory_share=PAGE_ENGINES * 2)
+            eng.load_scan(paths[name], store.get_json(db, f"scan:{name}"))  # the chat read the whole file already
             eng.attach(paths[name], name, merges=merges)  # refuses private folders, like the chat
             entry[0] = eng
         yield eng

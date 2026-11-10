@@ -7,7 +7,7 @@ result line only, and the SQL lesson stays one command away.
 
 import re
 
-from . import audit, engine, learning
+from . import audit, learning, sqltree
 
 _AGG = (("sum", "added up {}"), ("avg", "averaged {}"), ("min", "took the smallest {}"),
         ("max", "took the largest {}"), ("median", "took the middle {}"))
@@ -80,34 +80,35 @@ def _fmt(v):
 def steps(q, eng):
     """Numbered plain-words steps and a result line, as a list of strings."""
     parts = learning.clauses(q["sql"])
-    names = [n for n, _ in parts]
     clause = dict(parts)
     lines = []
-    frm = clause.get("FROM") or ""
-    simple = audit._SIMPLE_FROM.match(frm) if "WITH" not in names and "UNION" not in " ".join(names) else None
-    joined = audit._JOIN.match(frm) if not simple and "WITH" not in names else None
+    tree = sqltree.parse(q["sql"])  # what the query reads comes from DuckDB's parser; the words shown, from its text
+    kind, *src = tree.source() if tree else ("other",)
     select_items = split_list(clause.get("SELECT", ""))
-    if simple or joined:
-        table = (simple or joined).group(1)
-        total = audit._value(eng, f"SELECT count(*) FROM {table}")
-        if total is not None:
-            lines.append(f"Started with {total:,} rows in {table.strip(chr(34))}")
-        if joined:
-            key = joined.group(5) or joined.group(7)
-            lines.append(f"Matched each row with {joined.group(3).strip(chr(34))} on {key}")
+    if kind != "other":
+        read = audit._value(eng, tree.count_sql(where=False))  # rows the query reads, before its filter
+        if kind == "helper":
+            if read is not None:
+                lines.append(f"Started with {read:,} rows from {src[0]}, a result worked out first")
+        else:
+            total = audit._value(eng, f"SELECT count(*) FROM {src[0]}")
+            if total is not None:
+                lines.append(f"Started with {total:,} rows in {src[1]}")
+            if kind == "join":
+                lines.append(f"Matched each row with {src[3]} on {src[4]}")
         where = clause.get("WHERE")
         if where:
             cond = where[len("WHERE"):].strip()
-            kept = audit._value(eng, f"SELECT count(*) {frm} WHERE {cond}")
-            left = f" (left out {total - kept:,})" if kept is not None and total is not None and total > kept else ""
+            kept = audit._value(eng, tree.count_sql())
+            left = f" (left out {read - kept:,})" if kept is not None and read is not None and read > kept else ""
             count = f": {kept:,} rows{left}" if kept is not None else ""
             lines.append(f"Kept rows where {audit._plain(cond)}{count}")
         group = clause.get("GROUP BY")
         if group:
             keys = [k.strip() for k in group[len("GROUP BY"):].split(",")]
             labels = [_label(select_items[int(k) - 1]) if k.isdigit() and int(k) <= len(select_items) else _label(k) for k in keys]
-            core = " ".join(t for n, t in parts if n not in ("ORDER BY", "LIMIT"))
-            groups = audit._value(eng, f"SELECT count(*) FROM ({core})")
+            core = tree.sql(order=False)
+            groups = audit._value(eng, core and f"SELECT count(*) FROM ({core})")
             lines.append(f"Made one group per {' and '.join(labels)}" + (f": {groups:,} groups" if groups is not None else ""))
         for item in select_items:
             text = describe(item)
@@ -126,9 +127,8 @@ def steps(q, eng):
                 lines.append(f"Sorted by {col}, {'Z to A' if down else 'A to Z'}")
             else:
                 lines.append(f"Sorted from {'highest' if down else 'lowest'} {col}")
-        limit = clause.get("LIMIT")
-        if limit and re.match(r"LIMIT\s+\d+$", limit, re.I):
-            n = int(limit.split()[1])
+        n = tree.limit
+        if n:
             lines.append(f"Kept the {'top' if order else 'first'} {n}" if n > 1 else f"Kept the {'top' if order else 'first'} one")
     out = [f"{i}. {line}" for i, line in enumerate(lines, 1)]
     result = _result(q, eng, parts)
@@ -168,7 +168,7 @@ def _result(q, eng, parts):
     labels = [i for i in range(len(cols)) if i not in nums]
     if len(rows) == 1 and not labels:
         return "Result: " + ", ".join(f"{c} {_fmt(v)}" for c, v in zip(cols, rows[0]))
-    names = [n for n, _ in parts]
+    tree = sqltree.parse(q["sql"])
     if not nums or not labels:
         return f"Result: {len(rows):,} rows."
     li, vi = labels[0], nums[0]  # the first measure, unless the rows are sorted by another one
@@ -178,9 +178,8 @@ def _result(q, eng, parts):
     top = rows[0]
     line = f"Result: {top[li]}, {cols[vi]} {_fmt(top[vi])}"
     second = rows[1] if len(rows) > 1 else None
-    if second is None and "ORDER BY" in names and "LIMIT" in names:
-        core = " ".join(t for n, t in parts if n != "LIMIT")
-        found = audit._rows(eng, f"{core} LIMIT 2")
+    if second is None and tree and tree.order and tree.limit:
+        found = audit._rows(eng, tree.sql(limit=2))  # the runner-up of a top-1 query
         second = found[1] if found and len(found) > 1 else None
     if second is not None and key is not None:
         a, b = top[vi], second[vi]

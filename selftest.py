@@ -54,6 +54,10 @@ def test_verify():
                "April (2026-04), 4xx codes.\n1. first")
     assert chk(skipped) == ([], [], []), verify.extract(skipped)
     assert chk("top 3 regions", ignore=["3"]) == ([], [], [])
+    # a written date is not a claim: the day of "November 11, 2026" once made a right answer "needs revision"
+    for written in ("but today is November 11, 2026.", "on 11 November 2026", "since Nov. 3, 2026", "until Sept 30."):
+        assert verify.extract(written) == [], (written, verify.extract(written))
+    assert [c["raw"] for c in verify.extract("May 12 orders were late, and may 7 more")] == ["12", "7"]
     assert verify.footer([], []) == ""
     # derived numbers: simple arithmetic on shown numbers, unit changes, column totals
     v = [50000, 1996, 189759.34, 72188507.98, 4651666.19]
@@ -231,7 +235,10 @@ def test_learning(tmp, db):
     assert any("Sorted from highest dollars" in x for x in w.steps(q3, tools._get()[1])), w.steps(q3, tools._get()[1])
     assert w.describe("region") is None and w._label("strftime(order_date, '%Y-%m') AS m") == "month of order_date"
     cte = store.get_query(db, call(tools.query, sql="WITH t AS (SELECT * FROM orders) SELECT count(*) AS n FROM t")["id"])
-    assert w.steps(cte, tools._get()[1]) == ["Result: n 4"]  # too complex to retell: result only
+    assert w.steps(cte, tools._get()[1]) == ["1. Started with 4 rows from t, a result worked out first",
+                                             "2. Worked out n: counted rows", "Result: n 4"], w.steps(cte, tools._get()[1])
+    union = store.get_query(db, call(tools.query, sql="SELECT count(*) AS n FROM orders UNION ALL SELECT 4")["id"])
+    assert w.steps(union, tools._get()[1]) == ["Result: 2 rows."]  # too complex to retell: result only
     # clause splitter keeps subqueries and strings whole
     parts = learning.clauses("SELECT a FROM (SELECT * FROM t WHERE x = 'GROUP BY') s WHERE b > 1 ORDER BY a LIMIT 5")
     assert [p[0] for p in parts] == ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"], parts
@@ -350,6 +357,51 @@ def test_audit(tmp, db):
     assert any("join on customer_id matches several rows on both sides" in w for w in pkg.audit.pitfalls(q, eng))
     q = store.get_query(db, run("SELECT count(*) FROM orders")["id"])
     assert pkg.audit.pitfalls(q, eng) == [] and pkg.audit.assumptions(q, eng) == []
+    # DuckDB's parser reads the query, so the same checks work on a WITH query, a join and a table alias
+    saved = lambda sql: store.get_query(db, run(sql)["id"])
+    q = saved("WITH t AS (SELECT * FROM orders) SELECT sum(amount) AS total FROM t WHERE amount IS NOT NULL")
+    assert pkg.audit.assumptions(q, eng) == ["left out 1 of 4 rows (empty amount)"], pkg.audit.assumptions(q, eng)
+    joined = "FROM orders o JOIN visits v USING (customer_id)"
+    q = saved(f"SELECT sum(o.amount) AS total {joined} WHERE o.amount IS NOT NULL")
+    total, kept = (eng.query(f"SELECT count(*) {joined}{w}")[1][0][0] for w in ("", " WHERE o.amount IS NOT NULL"))
+    assert total > kept and pkg.audit.assumptions(q, eng) == [f"left out {total - kept} of {total} rows (empty amount)"], (
+        total, kept, pkg.audit.assumptions(q, eng))
+    q = saved("SELECT strftime(o.day, '%Y-%m') AS m, sum(o.amount) AS t FROM orders AS o GROUP BY 1 ORDER BY 1")
+    assert any("the last month (2026-02) has data only up to 2026-02-10" in w for w in pkg.audit.pitfalls(q, eng))
+    q = saved("SELECT customer_id, avg(amount) AS a FROM orders GROUP BY 1 ORDER BY avg(amount) DESC")
+    assert not any(w.startswith("average of averages") for w in pkg.audit.pitfalls(q, eng))  # one average, sorted by itself
+    q = saved("SELECT sum(o.amount) FROM orders o JOIN visits v ON v.customer_id = o.customer_id")
+    assert any("join on customer_id matches several rows on both sides" in w for w in pkg.audit.pitfalls(q, eng))
+    tree = pkg.sqltree.parse("SELECT a, sum(b) / 86.5 FROM \"shop\".\"orders\" WHERE c = 'x' ORDER BY 2 DESC LIMIT 5")
+    assert tree.source() == ("table", '"shop"."orders"', "orders") and tree.limit == 5 and tree.order[0][1], tree.source()
+    assert pkg.sqltree.parse("SELECT 1; SELECT 2") is None and pkg.sqltree.parse("SELECT FROM WHERE") is None
+    assert not pkg.sqltree.parse("SELECT 1 UNION ALL SELECT 2").plain and tree.plain
+    # FROM a, b with the join condition in WHERE: without the WHERE it is every pair of rows, so no count
+    q = saved("SELECT sum(o.amount) AS total FROM orders o, visits v WHERE o.customer_id = v.customer_id AND o.amount IS NOT NULL")
+    assert pkg.audit.assumptions(q, eng) == ["keeps only rows where o.customer_id = v.customer_id AND o.amount IS NOT NULL"], pkg.audit.assumptions(q, eng)
+    # a SEMI join keeps each row at most once: no double-count warning
+    q = saved("SELECT sum(o.amount) FROM orders o SEMI JOIN visits v ON o.customer_id = v.customer_id")
+    assert not any("join on" in w for w in pkg.audit.pitfalls(q, eng)), pkg.audit.pitfalls(q, eng)
+    # the unit of date_trunc in any letter case; a UNION keeps the checks that read the whole statement
+    q = saved("SELECT date_trunc('MONTH', day) AS m, sum(amount) AS t FROM orders GROUP BY 1 ORDER BY 1")
+    assert any("the last month (2026-02) has data only up to 2026-02-10" in w for w in pkg.audit.pitfalls(q, eng))
+    q = saved("SELECT strftime(day, '%Y-%m') AS m, sum(amount) / 86.5 AS t FROM orders GROUP BY 1 "
+              "UNION ALL SELECT strftime(day, '%Y-%m'), 1.0 FROM orders GROUP BY 1 ORDER BY 1 LIMIT 5")
+    found = pkg.audit.pitfalls(q, eng)
+    assert any("the last month (2026-02)" in w for w in found) and any(w.startswith("uses 86.5") for w in found), found
+    assert pkg.audit.assumptions(q, eng) == ["shows the top 5 only"], pkg.audit.assumptions(q, eng)
+    # a rate by its name, also in snake_case
+    rate = lambda name: bool(pkg.audit._RATE_NAME.search(name))
+    assert all(map(rate, ("conversion_rate", "pct_paid", "churn_ratio", "share", "Percentage"))) and not any(map(rate, ("separate", "duration", "shared")))
+    assert "count_star()" in tree.count_sql() and "c = 'x'" in tree.count_sql() and "WHERE" not in tree.count_sql(where=False)
+    assert "LIMIT 2" in tree.sql(limit=2) and "ORDER BY" not in tree.sql(order=False) and "LIMIT" not in tree.sql(order=False)
+    # which files a query read: table names only, in any letter case, also in a UNION
+    files = {"orders": None, "visits": None, "shop": None}
+    assert tools._datasets_in("SELECT orders FROM visits", files) == ["visits"]  # a column named like a file
+    assert tools._datasets_in("SELECT 1 FROM Orders UNION ALL SELECT 2 FROM visits_raw", files) == ["orders", "visits"]
+    assert tools._datasets_in('SELECT 1 FROM "shop"."items"', files) == ["shop"]
+    assert tools._datasets_in("SELECT 1 FROM shop.orders", files) == ["shop"]  # the SQLite file, not the CSV file orders
+    assert tools._datasets_in("WITH orders AS (SELECT 1 FROM visits) SELECT * FROM orders", files) == ["visits"]  # a WITH name
     # the footer: verdict follows the number check and the warnings
     qid = run("SELECT sum(amount) AS total FROM orders WHERE amount IS NOT NULL")["id"]
     out = tools.check_reply(f"Total is 220 [{qid}].", "test")
@@ -390,8 +442,9 @@ def test_analysis_checks(tmp, db):
     # a rate typed into the SQL is an assumption; unit factors are not
     q = store.get_query(db, run("SELECT round(count(*) / 100.0 / 86.5, 2) AS usd, count(*) * 1000 AS m FROM visits")["id"])
     assert "uses 86.5, written into the SQL, not taken from the data" in pkg.audit.pitfalls(q, eng_of())
-    assert pkg.audit._constants("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000") == ["0.18"]
-    assert pkg.audit._constants("floor(fare_amount / 5) * 5 AS bucket, count(*)") == []  # a bucket width
+    items = lambda text: pkg.sqltree.parse(f"SELECT {text}").select
+    assert pkg.audit._constants(items("sum(x) / 100, avg(y) * 2, 0.18 * fare, z / 1000")) == ["0.18"]
+    assert pkg.audit._constants(items("floor(fare_amount / 5) * 5 AS bucket, count(*)")) == []  # a bucket width
     # one value spelled two ways in the result: a warning, so the verdict is not "ready to share"
     q = {"columns": ["region", "revenue"], "rows": [["North", 29.0], ["South", 24.5], ["north ", 3.0], ["N. Region", 0.9]]}
     assert pkg.audit._result_variants(q) == "'North' / 'north ' / 'N. Region'", pkg.audit._result_variants(q)
@@ -746,7 +799,7 @@ def test_review_fixes(tmp, db):
     random_vals = [round(10 + 37.3 * i % 4990, 2) for i in range(150)] + list(range(1, 51))
     s_, d_, u_, loose = verify.check_detail("Growth was 23.7%, the share 41.2% and the average 18.4.", random_vals)
     assert not u_ and {"23.7%", "41.2%"} <= set(loose), (s_, d_, u_, loose)  # 18.4 is 1840 / 100 here: a unit change
-    assert pkg.audit.review([], None, [], loose)[0] == "share with caveats"
+    assert pkg.audit.review([], None, [], verify.caveats(loose))[0] == "share with caveats"
     # SQL that computes millions (29.05) and a reply that writes "$29.05M": the number traces as written
     musd = verify.numeric_values([["North", 29.05, 15025], ["north ", 3.04, 1609], ["N. Region", 0.94, 493]])
     s_, d_, u_ = verify.check("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
@@ -841,6 +894,11 @@ def test_security(tmp, db):
     hermes_db = Path.home() / ".hermes" / "state.db"
     r = call(tools.attach, path=str(hermes_db))
     assert "does not open files in ~/.hermes" in r.get("error", ""), r
+    # a pattern or a folder in a private place gets the same answer whether files match or not
+    # built with Path like the checks above (a literal home path in a test reads as file access to the scanner)
+    for pattern in (str(Path.home() / ".ssh" / "*.csv"), str(Path.home() / ".SSH" / "no_such_*.parquet"), "~/.hermes",
+                    str(Path.home() / ".gnupg") + "/"):
+        assert "does not open files in ~/." in call(tools.attach, path=pattern).get("error", ""), pattern
 
 
 def test_one_check_per_file_version(tmp, db):
@@ -880,6 +938,26 @@ def test_one_check_per_file_version(tmp, db):
     assert "137 match another result of this chat" in note, note
     note = tools.check_reply(f"The file has 43 rows [{one['id']}], 137 customers left and 4,321 came back.", "cite")
     assert "1 of 3 numbers trace" in note and "No source query for: 4,321" in note and "needs revision" in note, note
+    # the right size with the wrong direction: the result is -12.5 and the reply says it grew
+    down = ask(tools.query, sql="SELECT -12.5 AS change_pct, 40 AS orders")
+    for reply in ("Revenue grew 12.5%", "Revenue is up by 12.5%", "That is a 12.5% increase"):
+        note = tools.check_reply(f"{reply} [{down['id']}].", "cite")
+        assert "12.5% is written as a rise, but the result is negative" in note and "share with caveats" in note, note
+    for reply in ("Revenue fell 12.5%", "Revenue did not grow; it changed by 12.5%", "Revenue grew -12.5%",
+                  "Revenue fell 12.5% while orders grew to 40"):
+        note = tools.check_reply(f"{reply} [{down['id']}].", "cite")
+        assert "written as a rise" not in note and "ready to share" in note, (reply, note)
+    assert verify.rises_on_negatives("Sales rose 5% and costs rose 5%.", [5.0, -5.0]) == []  # 5 is also a positive result
+    flips = lambda reply, results=(-12.5, -3.0): verify.rises_on_negatives(reply, list(results))
+    for reply in ("Revenue grew **12.5%**", "Revenue went up **12.5%**", "It grew by ~12.5%", "Revenue was 4.2M, up 12.5% on March",
+                  "a **12.5%** increase", "12.5% revenue growth"):
+        assert flips(reply) == ["12.5%"], reply
+    for reply in ("12.5% negative growth", "12.5% lower growth than last year", "Returns made up 12.5% of orders",
+                  "I set up 3 dashboards", "Revenue grew **-12.5%**", "up to 3 rows"):
+        assert flips(reply) == [], reply
+    # a citation to a query that does not exist is not a receipt
+    note = tools.check_reply("The file has 43 rows [q987654].", "cite")
+    assert "cites q987654, which is not a saved query" in note and "share with caveats" in note, note
     # attach and profile facts have no id, so they need no citation; with no citation the whole chat counts
     assert "all 2 numbers trace" in tools.check_reply(f"The file has 43 rows [{one['id']}] and 2 columns.", "cite")
     assert "all 2 numbers trace" in tools.check_reply("43 rows and 137 customers.", "cite")
@@ -887,6 +965,86 @@ def test_one_check_per_file_version(tmp, db):
     rows, source, sampled = eng.profile("repeat")
     assert source == "grimoire_sample" and not sampled and rows[0]["count"] == 43, (source, sampled, rows[0])
     assert eng.query("SELECT count(*) FROM grimoire_sample")[1] == [[43]]
+
+
+def test_restart(tmp):
+    """After a restart every saved file opens with one rebuild and no full read; a broken file is left out."""
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    tools.setup(db=db, eng=None)
+    late = tmp / "late.csv"
+    late.write_text("id,amount\n" + "1,100\n" * 30000 + "2,0.4\nbad,line,extra\n")
+    other = tmp / "other.csv"
+    other.write_text("a,b\n1,2\n")
+    first = call(tools.attach, path=str(late))
+    assert first["skipped_lines"]["count"] == 1 and "amount DOUBLE" in first["tables"][0]["columns"], first
+    call(tools.attach, path=str(other))
+    garbage = tmp / "garbage.parquet"
+    garbage.write_text("this is not a parquet file")
+    store.save_dataset(db, "garbage", str(garbage), "parquet")
+    counts = {"scan": 0, "types": 0, "rebuild": 0}
+    real = engine._scan_files, engine._late_decimals, engine.Engine._rebuild
+    engine._scan_files = lambda *a: counts.__setitem__("scan", counts["scan"] + 1) or real[0](*a)
+    engine._late_decimals = lambda *a: counts.__setitem__("types", counts["types"] + 1) or real[1](*a)
+    engine.Engine._rebuild = lambda self: counts.__setitem__("rebuild", counts["rebuild"] + 1) or real[2](self)
+    try:
+        tools.setup(db=db, eng=None)  # a restart: a new engine, the same saved files
+        again = call(tools.attach, path=str(late))
+    finally:
+        engine._scan_files, engine._late_decimals, engine.Engine._rebuild = real
+    assert again == first, (again, first)  # the skipped line and the wider type come from the saved scan
+    # one rebuild, also with a broken file in the list; the one type read is the broken file's, which has no saved scan
+    assert counts == {"scan": 0, "types": 1, "rebuild": 1}, counts
+    assert set(tools._get()[1].datasets) == {"late", "other"}
+    assert call(tools.query, sql="SELECT sum(amount) AS total, (SELECT count(*) FROM other) AS n FROM late")["rows"] == [[3000000.4, 1]]
+    late.write_text("id,amount\n1,5\n")  # a changed file is read again
+    os.utime(late, (time.time() + 9, time.time() + 9))
+    assert "skipped_lines" not in call(tools.attach, path=str(late))
+    commands.run("forget late")
+    assert store.get_json(db, "scan:late") is None and store.get_json(db, "scan:other")
+    # a saved scan is data: a type that is not DOUBLE never reaches the SQL that builds the view, and a damaged
+    # record means "read the file again", not a plugin that cannot start
+    for damage in ({"widen": {"a": "VARCHAR'}, header = false) --"}}, {"rejects": "not a list"}, {"widen": 7}):
+        store.set_json(db, "scan:other", {**store.get_json(db, "scan:other"), **damage})
+        tools.setup(db=db, eng=None)
+        assert call(tools.query, sql="SELECT a, b FROM other")["rows"] == [[1, 2]], damage
+    db.execute("UPDATE settings SET value = '{not json' WHERE key = 'scan:other'")
+    tools.setup(db=db, eng=None)
+    assert call(tools.query, sql="SELECT a, b FROM other")["rows"] == [[1, 2]]
+    # a file that breaks after it was opened is left out; it does not block the next attach
+    import duckdb
+    good = tmp / "wide.parquet"
+    duckdb.sql(f"COPY (SELECT 1 AS x) TO '{good}' (FORMAT parquet)")
+    assert call(tools.attach, path=str(good))["tables"][0]["rows"] == 1
+    good.write_text("not a parquet file any more")
+    os.utime(good, (time.time() + 9, time.time() + 9))
+    third = tmp / "third.csv"
+    third.write_text("k\n1\n2\n")
+    assert call(tools.attach, path=str(third))["tables"][0]["rows"] == 2
+    assert "wide" not in tools._get()[1].datasets and "error" in call(tools.attach, path=str(good))
+    assert call(tools.query, sql="SELECT count(*) FROM third")["rows"] == [[2]]
+    assert call(tools.catalog)["datasets"] and "wide" in [d["dataset"] for d in call(tools.catalog)["datasets"] if d.get("status")]
+    assert "error" not in json.loads(tools.query({"sql": "SELECT 1"}, session_id="test")) and commands.run("forget third").startswith("Deleted third")
+    # the last 50 chats with results and the last 50 without are kept apart: a chat that asked its question
+    # and has not called a tool yet is not pushed out by other chats
+    for i in range(49):
+        tools.remember(f"busy{i}", [i])
+    tools.remember_user_message("waiting", "show the top 5 of the 2,000 orders")
+    for i in range(30):
+        tools.remember_call(f"other{i}", tool_count=3)
+    assert tools._sessions["waiting"].message.startswith("show the top 5") and "busy0" in tools._sessions
+    for i in range(60):
+        tools.remember_call(f"more{i}", tool_count=3)
+    assert "waiting" not in tools._sessions and "busy0" in tools._sessions and len(tools._sessions) <= 100
+    # a slow or failing audit count is remembered, not tried again on every reply
+    eng, tries = tools._get()[1], []
+    real_query = eng.query
+    eng.query = lambda sql, timeout=30: tries.append(sql) or real_query(sql, timeout)
+    try:
+        assert pkg.audit._value(eng, "SELECT count(*) FROM no_such_table") is None
+        assert pkg.audit._value(eng, "SELECT count(*) FROM no_such_table") is None and len(tries) == 1, tries
+    finally:
+        del eng.query
+    assert pkg.sqltree.parse("SELECT 1 -- " + "x" * pkg.sqltree.MAX_SQL) is None  # too long to parse and keep
 
 
 def call(handler, **args):
@@ -1013,6 +1171,7 @@ def main():
     test_charts()
     test_compare(tmp, db)
     test_one_check_per_file_version(tmp, db)
+    test_restart(tmp)
     print("selftest passed")
 
 
