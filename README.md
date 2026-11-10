@@ -241,7 +241,7 @@ The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_que
 - **Your files never change.** Merge rules apply inside Grimoire only.
 - **SQLite files** are copied to a temporary folder as CSV, once per file version, and loaded into DuckDB from there.
 - **Reports** are written to `~/.hermes/plugin-data/grimoire/reports/` only when you run `/grimoire report`.
-- **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
+- **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, the first 20 malformed lines of each file, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
 - **Network:** none. Your model provider sees what the model sees, as with any Hermes tool.
 - **Shell commands, background processes, credentials and telemetry:** none.
 - **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (opens a named data file and adds its table and columns; the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the check and, when on, the learning card), `pre_api_request` and `post_api_request` (keep the tool count and input token count of each model call in memory for `/grimoire`; no message content).

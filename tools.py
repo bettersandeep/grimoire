@@ -297,13 +297,13 @@ def _get():
             _state["db"] = open_db()
         if _state["engine"] is None:
             store.init(_state["db"])
-            eng = engine.Engine()
-            for name, path, _kind in store.datasets(_state["db"]):
-                try:  # files, folders and patterns alike; attach raises EngineError when one is gone
-                    eng.attach(path, name, merges=store.merges(_state["db"], name),
-                               allow_private=_options["allow_private_folders"])
-                except engine.EngineError:
-                    pass  # the file changed or broke; the catalog still lists it as missing
+            eng, db = engine.Engine(), _state["db"]
+            saved = store.datasets(db)
+            for name, path, _kind in saved:  # what the last full reads found, if the file is unchanged
+                eng.load_scan(path, store.get_json(db, f"scan:{name}"))
+            # one rebuild for all files; one that is gone or broken is left out, and the catalog lists it as missing
+            eng.attach_all([(path, name, store.merges(db, name)) for name, path, _kind in saved],
+                           allow_private=_options["allow_private_folders"])
             _state["engine"] = eng
         return _state["db"], _state["engine"]
 
@@ -404,6 +404,8 @@ def attach(args, session_id=None, **kwargs):
     with _lock:
         known = _checked.get(name)
     known = known if known and known[0] == version else None
+    if not known:
+        store.set_json(db, f"scan:{name}", eng.scan(name))  # so a restart does not read the whole file again
     tables = []
     for ref in eng.tables(name):
         sql_ref = engine.sql_ref(ref)

@@ -899,6 +899,42 @@ def test_one_check_per_file_version(tmp, db):
     assert eng.query("SELECT count(*) FROM grimoire_sample")[1] == [[43]]
 
 
+def test_restart(tmp):
+    """After a restart every saved file opens with one rebuild and no full read; a broken file is left out."""
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    tools.setup(db=db, eng=None)
+    late = tmp / "late.csv"
+    late.write_text("id,amount\n" + "1,100\n" * 30000 + "2,0.4\nbad,line,extra\n")
+    other = tmp / "other.csv"
+    other.write_text("a,b\n1,2\n")
+    first = call(tools.attach, path=str(late))
+    assert first["skipped_lines"]["count"] == 1 and "amount DOUBLE" in first["tables"][0]["columns"], first
+    call(tools.attach, path=str(other))
+    garbage = tmp / "garbage.parquet"
+    garbage.write_text("this is not a parquet file")
+    store.save_dataset(db, "garbage", str(garbage), "parquet")
+    counts = {"scan": 0, "types": 0, "rebuild": 0}
+    real = engine._scan_files, engine._late_decimals, engine.Engine._rebuild
+    engine._scan_files = lambda *a: counts.__setitem__("scan", counts["scan"] + 1) or real[0](*a)
+    engine._late_decimals = lambda *a: counts.__setitem__("types", counts["types"] + 1) or real[1](*a)
+    engine.Engine._rebuild = lambda self: counts.__setitem__("rebuild", counts["rebuild"] + 1) or real[2](self)
+    try:
+        tools.setup(db=db, eng=None)  # a restart: a new engine, the same saved files
+        again = call(tools.attach, path=str(late))
+    finally:
+        engine._scan_files, engine._late_decimals, engine.Engine._rebuild = real
+    assert again == first, (again, first)  # the skipped line and the wider type come from the saved scan
+    # one rebuild, and one more without the broken file; the one type read is the broken file's, which has no saved scan
+    assert counts == {"scan": 0, "types": 1, "rebuild": 2}, counts
+    assert set(tools._get()[1].datasets) == {"late", "other"}
+    assert call(tools.query, sql="SELECT sum(amount) AS total, (SELECT count(*) FROM other) AS n FROM late")["rows"] == [[3000000.4, 1]]
+    late.write_text("id,amount\n1,5\n")  # a changed file is read again
+    os.utime(late, (time.time() + 9, time.time() + 9))
+    assert "skipped_lines" not in call(tools.attach, path=str(late))
+    commands.run("forget late")
+    assert store.get_json(db, "scan:late") is None and store.get_json(db, "scan:other")
+
+
 def call(handler, **args):
     return json.loads(handler(args, session_id="test"))
 
@@ -1023,6 +1059,7 @@ def main():
     test_charts()
     test_compare(tmp, db)
     test_one_check_per_file_version(tmp, db)
+    test_restart(tmp)
     print("selftest passed")
 
 
