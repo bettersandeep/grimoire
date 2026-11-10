@@ -733,6 +733,23 @@ def test_review_fixes(tmp, db):
     musd = verify.numeric_values([["North", 29.05, 15025], ["north ", 3.04, 1609], ["N. Region", 0.94, 493]])
     s_, d_, u_ = verify.check("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
     assert s_ == ["29.05M", "3.04M", "0.94M"] and u_ == ["33.03M"], (s_, d_, u_)  # a 3-number total belongs in SQL
+    # "$15M" must not match a count of 15; "all numbers trace" never counts loose matches
+    s_, d_, u_ = verify.check("North brought in $15M [q1].", verify.numeric_values([["North", 1200, 15]]))
+    assert u_ == ["15M"], (s_, d_, u_)
+    assert "Check how these were worked out: 23.7%" in verify.footer([], [], ["23.7%"], ["23.7%"])
+    # a merge that reverses an old one wins
+    store.save_merge(db, "rev", "rev", "r", ["North"], "Northern")
+    store.save_merge(db, "rev", "rev", "r", ["Northern"], "North")
+    assert store.merges(db, "rev")[("rev", "r")] == {"Northern": "North"}, store.merges(db, "rev")
+    store.delete_merges(db, "rev")
+    # a folder dataset comes back after a restart
+    fold = d / "monthsr"
+    fold.mkdir(exist_ok=True)
+    (fold / "a.csv").write_text("v\n1\n")
+    (fold / "b.csv").write_text("v\n2\n")
+    call(tools.attach, path=str(fold), name="monthsr")
+    tools.setup(db=db, eng=None)
+    assert call(tools.query, sql="SELECT sum(v) FROM monthsr")["rows"] == [[3]]
     # C-7: only bracketed ids are citations
     assert tools.check_reply("Apple's Q3 revenue rose 12%.", "never-used") == ""
     # C-8 is covered in test_data_plugin (regions_2). C-9: a deleted file does not break other attaches
