@@ -111,6 +111,14 @@ def _matches(pool, value, tol, percent):
 
 
 MAX_PAIR_POOL = 300
+MAX_TRIPLE_SHOWN = 60  # 60 shown numbers give about 34k sums of three
+
+
+def _triples(values):
+    """Sums of three shown numbers, e.g. one region spelled three ways merged into one total."""
+    if len(values) > MAX_TRIPLE_SHOWN:
+        return set()
+    return {a + b + c for i, a in enumerate(values) for j, b in enumerate(values[i + 1:], i + 1) for c in values[j + 1:]}
 
 
 def _pairs(values, ratios):
@@ -137,7 +145,7 @@ def check_detail(text, values, ignore=(), totals=()):
     values: numbers from tool results. ignore: raw strings to skip (numbers the user typed).
     totals: column totals of cited results. A claim is "derived" when simple arithmetic on
     sourced numbers gives it: a unit change (x100, /100, x1000, /1000), the sum, difference,
-    ratio or percent share of two numbers the reply shows, or a column total.
+    ratio or percent share of two numbers the reply shows, the sum of three, or a column total.
     """
     pool = sorted(set(values))
     ignored = {s.replace(",", "") for s in ignore}
@@ -159,7 +167,7 @@ def check_detail(text, values, ignore=(), totals=()):
     units = set()  # cents to dollars, units to thousands; a percent has its own x100 rule in _matches
     for f in (100.0, 1000.0):
         units |= {v * f for v in pool} | {v / f for v in pool}
-    wide, wide_pct = sorted(other | units), sorted(other)
+    wide, wide_pct = sorted(other | units | _triples(shown)), sorted(other)
     hidden = sorted(_pairs(sorted(strong | set(pool)), ratios=True)) if len(pool) <= MAX_PAIR_POOL else []
     derived, unsourced, loose = [], [], []
     for claim in rest:
@@ -168,6 +176,8 @@ def check_detail(text, values, ignore=(), totals=()):
         # ratio, share or column total.
         small = claim["value"] < 100 and claim["value"] == int(claim["value"]) and not claim["percent"]
         ok = _matches(sums if small else wide_pct if claim["percent"] else wide, claim["value"], claim["tol"], claim["percent"])
+        if not ok and claim.get("written") is not None:  # "$66,763.08M" when the shown numbers are millions
+            ok = _near(wide, claim["written"], claim["written_tol"])
         if not ok and not small and _matches(hidden, claim["value"], claim["tol"], claim["percent"]):
             ok = True
             loose.append(claim["raw"])

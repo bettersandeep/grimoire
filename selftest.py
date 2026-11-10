@@ -61,6 +61,11 @@ def test_verify():
     assert chk("$189,759.34 (18,975,934 cents)", v) == (["189,759.34"], ["18,975,934"], [])
     assert chk("72,188,507.98 and 4,651,666.19 make 76,840,174.17", v)[1] == ["76,840,174.17"]
     assert chk("Total $300", [100, 200], totals=[300])[1] == ["300"]
+    # one region spelled three ways, merged by the model: a sum of three shown numbers
+    three = "North 58,904.49, north 5,893.35 and N. Region 1,965.24: about 66,763.08 together"
+    assert chk(three, [58904.49, 5893.35, 1965.24, 49079.24]) == (["58,904.49", "5,893.35", "1,965.24"], ["66,763.08"], [])
+    assert chk(three.replace("66,763.08", "66,763.99"), [58904.49, 5893.35, 1965.24])[2] == ["66,763.99"]
+    assert chk(three.replace("66,763.08", "$66,763.08M"), [58904.49, 5893.35, 1965.24])[1] == ["66,763.08M"]
     assert chk("964 of 1000 rows have an amount (36 skipped)", [1000, 964]) == (["964"], ["36"], [])
     assert chk("about 2,000 empty", v) == ([], [], ["2,000"])  # rounded: still flagged
     # the real reply: the derived total is now traced by arithmetic; the invented count is still flagged
@@ -732,7 +737,7 @@ def test_review_fixes(tmp, db):
     # SQL that computes millions (29.05) and a reply that writes "$29.05M": the number traces as written
     musd = verify.numeric_values([["North", 29.05, 15025], ["north ", 3.04, 1609], ["N. Region", 0.94, 493]])
     s_, d_, u_ = verify.check("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
-    assert s_ == ["29.05M", "3.04M", "0.94M"] and u_ == ["33.03M"], (s_, d_, u_)  # a 3-number total belongs in SQL
+    assert s_ == ["29.05M", "3.04M", "0.94M"] and d_ == ["33.03M"] and not u_, (s_, d_, u_)  # sum of three shown
     # "$15M" must not match a count of 15; "all numbers trace" never counts loose matches
     s_, d_, u_ = verify.check("North brought in $15M [q1].", verify.numeric_values([["North", 1200, 15]]))
     assert u_ == ["15M"], (s_, d_, u_)
