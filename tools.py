@@ -33,6 +33,7 @@ _state = {"db": None, "engine": None}
 # ponytail: in memory, last 50 sessions and 50k values each; lost on restart (cited query ids still work).
 _MAX_SESSIONS, _MAX_VALUES = 50, 50000
 _values = OrderedDict()
+_file_values = OrderedDict()  # session -> the numbers from attach and profile: facts with no query id to cite
 _user_numbers = OrderedDict()
 _messages = OrderedDict()   # session -> the user's last message (for /grimoire explain)
 _last_qid = OrderedDict()   # session -> the last query id it ran
@@ -54,12 +55,14 @@ def _bucket(table, session_id):
     return bucket
 
 
-def remember(session_id, result):
+def remember(session_id, result, query=False):
+    """query: the numbers are a saved query's result, which an answer cites by id; else attach or profile facts."""
     numbers = verify.numeric_values(result)
     with _lock:
-        bucket = _bucket(_values, session_id)
-        bucket.extend(numbers)
-        del bucket[:-_MAX_VALUES]
+        for table in (_values,) if query else (_values, _file_values):
+            bucket = _bucket(table, session_id)
+            bucket.extend(numbers)
+            del bucket[:-_MAX_VALUES]
         _last["session"] = session_id or ""
 
 
@@ -144,6 +147,7 @@ def check_reply(text, session_id=None):
     with _lock:
         key = session_id if session_id in _values else (_last["session"] if not session_id else None)
         values = list(_values.get(key, [])) if key is not None else []
+        file_values = list(_file_values.get(key, [])) if key is not None else []
         ignore = list(_user_numbers.get(session_id or "", []))
         last_qid = _last_qid.get(key) if key is not None else None
     # only bracketed ids like [q12] or [q3, q4]: "Apple's Q3" is not a citation
@@ -152,22 +156,32 @@ def check_reply(text, session_id=None):
     if not values and not cited:
         return ""  # Grimoire was not used here: do not open the database
     db, eng = _get()
-    totals, cited_queries = [], []
+    totals, cited_queries, cited_values = [], [], []
     for qid in cited:
         q = store.get_query(db, qid)
         if q:
             cited_queries.append(q)
-            values.extend(verify.numeric_values(q["rows"]))
+            cited_values.extend(verify.numeric_values(q["rows"]))
             totals.extend(_column_totals(q["rows"]))
+    values += cited_values
     if not values:
         return ""
-    sourced, derived, unsourced, loose = verify.check_detail(text, values, ignore=ignore, totals=totals)
-    out = verify.footer(sourced, unsourced, derived, loose)
+    # An answer that cites queries must take its numbers from those results, or from attach and profile
+    # (they have no id). Every other result of the chat is too wide a net: one list of 200 order ids
+    # "sources" any invented count up to 200. Such a number is not counted as traced.
+    pool = file_values + cited_values if cited_queries else values
+    sourced, derived, unsourced, loose = verify.check_detail(text, pool, ignore=ignore, totals=totals)
+    uncited = []
+    if cited_queries and unsourced:
+        nowhere = verify.check_detail(text, values, ignore=ignore, totals=totals)[2]
+        uncited = [n for n in unsourced if n not in nowhere]
+        unsourced = [n for n in unsourced if n in nowhere]
+    out = verify.footer(sourced, unsourced, derived, loose, uncited)
     if out:
         audited = cited_queries or [q for q in [store.get_query(db, last_qid)] if q] if last_qid else cited_queries
         if audited:
             try:
-                judged, lines = audit.review(audited, eng, unsourced, loose)
+                judged, lines = audit.review(audited, eng, unsourced, loose, uncited)
                 out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
             except Exception:
                 pass  # the audit is extra; never lose the number check because of it
@@ -285,7 +299,7 @@ def _receipt(db, session_id, sql, purpose, columns, rows, truncated, datasets):
     with _lock:
         question = _messages.get(session_id or "")
     qid = store.save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=datasets, question=question)
-    remember(session_id, rows)
+    remember(session_id, rows, query=True)
     with _lock:
         _put(_last_qid, session_id, qid)
     return qid
@@ -663,7 +677,7 @@ def _datasets_in(sql, datasets):
 
 def forget_values():
     with _lock:
-        for table in (_values, _user_numbers, _messages, _last_qid, _guesses, _checked):
+        for table in (_values, _file_values, _user_numbers, _messages, _last_qid, _guesses, _checked):
             table.clear()
 
 

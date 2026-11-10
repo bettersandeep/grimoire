@@ -240,10 +240,14 @@ def verdict(unsourced, warnings):
     return "share with caveats" if warnings else "ready to share"
 
 
-def review(queries, eng, unsourced, loose=()):
+def review(queries, eng, unsourced, loose=(), uncited=()):
     """Footer lines for the cited queries: (verdict, [lines]). Empty lines when there is nothing to say.
-    loose: numbers that match only by combining two result values; the reader should check how."""
+    loose: numbers that match only by combining two result values; the reader should check how.
+    uncited: numbers found only in a result of the chat that the answer does not cite."""
     assumed, warned = [], []
+    if uncited:
+        warned.append(f"{' · '.join(dict.fromkeys(uncited))} match another result of this chat, not a query the "
+                      "answer cites, so the match can be chance; cite that query, or compute them again")
     if loose:
         warned.append(f"{' · '.join(dict.fromkeys(loose))} only match by combining two values from the result; "
                       "check how they were worked out, or compute them in SQL")

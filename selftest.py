@@ -869,6 +869,20 @@ def test_one_check_per_file_version(tmp, db):
     note = tools.check_reply(f"The total is 50 [{r['id']}].", "test")
     assert "left out 5 of 10 rows (city = 'New  York')" in note, note
     assert learning.clauses('SELECT "a  b"   FROM t')[0] == ("SELECT", 'SELECT "a  b"')
+    # an answer that cites a query takes its numbers from that result: 137 is in a list of ids, not in the cited
+    # count. A new chat, so only its own numbers are in play.
+    ask = lambda handler, **args: json.loads(handler(args, session_id="cite"))
+    ask(tools.attach, path=str(path))
+    ask(tools.query, sql="SELECT * FROM range(1, 201)")
+    one = ask(tools.query, sql="SELECT count(*) AS n FROM repeat")
+    note = tools.check_reply(f"The file has 43 rows [{one['id']}], and 137 customers left.", "cite")
+    assert "1 of 2 numbers trace" in note and "Not from a cited query: 137" in note and "share with caveats" in note, note
+    assert "137 match another result of this chat" in note, note
+    note = tools.check_reply(f"The file has 43 rows [{one['id']}], 137 customers left and 4,321 came back.", "cite")
+    assert "1 of 3 numbers trace" in note and "No source query for: 4,321" in note and "needs revision" in note, note
+    # attach and profile facts have no id, so they need no citation; with no citation the whole chat counts
+    assert "all 2 numbers trace" in tools.check_reply(f"The file has 43 rows [{one['id']}] and 2 columns.", "cite")
+    assert "all 2 numbers trace" in tools.check_reply("43 rows and 137 customers.", "cite")
     eng = tools._get()[1]
     rows, source, sampled = eng.profile("repeat")
     assert source == "grimoire_sample" and not sampled and rows[0]["count"] == 43, (source, sampled, rows[0])
