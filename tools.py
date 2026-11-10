@@ -158,7 +158,7 @@ def check_reply(text, session_id=None):
     if not values:
         return ""
     sourced, derived, unsourced, loose = verify.check_detail(text, values, ignore=ignore, totals=totals)
-    out = verify.footer(sourced, unsourced, derived)
+    out = verify.footer(sourced, unsourced, derived, loose)
     if out:
         audited = cited_queries or [q for q in [store.get_query(db, last_qid)] if q] if last_qid else cited_queries
         if audited:
@@ -236,12 +236,11 @@ def _get():
             store.init(_state["db"])
             eng = engine.Engine()
             for name, path, _kind in store.datasets(_state["db"]):
-                if os.path.isfile(path):
-                    try:
-                        eng.attach(path, name, merges=store.merges(_state["db"], name),
-                                   allow_private=_options["allow_private_folders"])
-                    except engine.EngineError:
-                        pass  # the file changed or broke; the catalog still lists it as missing
+                try:  # files, folders and patterns alike; attach raises EngineError when one is gone
+                    eng.attach(path, name, merges=store.merges(_state["db"], name),
+                               allow_private=_options["allow_private_folders"])
+                except engine.EngineError:
+                    pass  # the file changed or broke; the catalog still lists it as missing
             _state["engine"] = eng
         return _state["db"], _state["engine"]
 

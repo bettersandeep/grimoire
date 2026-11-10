@@ -216,7 +216,10 @@ def _upsert_merge(db, target, dataset, table, column, values, into):
     where = "dataset = ? AND tbl = ? AND col = ?"
     row = db.execute(f"SELECT to_value FROM {target} WHERE {where} AND from_value = ?",
                      (dataset, table, column, into)).fetchone()
-    into = row[0] if row else into  # into is itself merged away: point at its final value
+    if row and row[0] in values:  # the new rule reverses an old one (North -> Northern, now Northern -> North)
+        db.execute(f"DELETE FROM {target} WHERE {where} AND from_value = ?", (dataset, table, column, into))
+    elif row:
+        into = row[0]  # into is itself merged away: point at its final value
     db.executemany(f"UPDATE {target} SET to_value = ? WHERE {where} AND to_value = ?",
                    [(into, dataset, table, column, v) for v in values if v != into])
     db.execute(f"DELETE FROM {target} WHERE {where} AND from_value = to_value", (dataset, table, column))

@@ -71,7 +71,8 @@ def extract(text):
             "tol": 0.5 * 10 ** -decimals * mult,
             "percent": unit in ("%", "percent"),
             # "$29.05M" also matches 29.05 as written: SQL often computes in millions (revenue_musd)
-            "written": number if mult != 1.0 else None,
+            # not for small whole numbers: "$15M" must not match a count of 15
+            "written": number if mult != 1.0 and not (number < 100 and number == int(number)) else None,
             "written_tol": 0.5 * 10 ** -decimals,
         })
     return claims
@@ -174,13 +175,18 @@ def check_detail(text, values, ignore=(), totals=()):
     return [c["raw"] for c in sourced], derived, unsourced, loose
 
 
-def footer(sourced, unsourced, derived=()):
-    """A short plain-text footer, or "" when the reply has no numeric claims."""
+def footer(sourced, unsourced, derived=(), loose=()):
+    """A short plain-text footer, or "" when the reply has no numeric claims.
+    loose numbers (matched only by combining two hidden result values) are not counted as tracing."""
+    derived = [d for d in derived if d not in loose]
     traced = len(sourced) + len(derived)
-    total = traced + len(unsourced)
+    total = traced + len(unsourced) + len(loose)
     if not total:
         return ""
     how = f" ({len(derived)} by simple arithmetic: {' · '.join(dict.fromkeys(derived))})" if derived else ""
+    if loose and not unsourced:
+        return (f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
+                f"Check how these were worked out: {' · '.join(dict.fromkeys(loose))}")
     if not unsourced:
         what = "the number traces" if total == 1 else f"all {total} numbers trace"
         return f"\n\n---\nGrimoire check: {what} to query results{how}."
