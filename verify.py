@@ -109,9 +109,13 @@ def numeric_values(obj):
 
 # A reply can state the right size with the wrong direction: "grew 12.5%" for a result of -12.5.
 _RISE = r"(?:grew|grows?|grown|growing|growth|rose|rises?|risen|rising|increas(?:e|es|ed|ing)|gain(?:s|ed|ing)?|jump(?:s|ed|ing)?|climb(?:s|ed|ing)?|surg(?:e|es|ed|ing)|up)"
-_RISE_BEFORE = re.compile(rf"\b{_RISE}(?:\s+(?:by|of|about|around|roughly|nearly|almost|over|a|an|the|was|is|at))*\s*[+$€£₹]?\s*$", re.I)
-_RISE_AFTER = re.compile(r"\s*(?:[a-z]+\s+)?(?:increase|growth|rise|gain|jump)\b", re.I)  # "a 12.5% increase"
+# "grew 12.5%", "grew by about **12.5%**", "up ~$12.5M": only filler words, spaces, Markdown marks and signs between
+_RISE_BEFORE = re.compile(rf"\b({_RISE})(?:\s+(?:by|of|about|around|roughly|nearly|almost|over|a|an|the|was|is|at))*[\s*_~≈+$€£₹]*$", re.I)
+# "a 12.5% increase", "12.5% revenue growth"; not "12.5% negative growth" or "12.5% lower growth"
+_RISE_AFTER = re.compile(r"[\s*_]*(?:(?!negative|lower|less|slower|weaker|smaller|no|zero)[a-z]+\s+)?(?:increase|growth|rise|gain|jump)\b", re.I)
 _NOT = re.compile(r"\b(?:not|no|never|without)\b|n't\b", re.I)
+# "up" is a rise only as "is up", "went up" or after a comma: not in "made up 12.5% of" or "set up 3 dashboards"
+_UP_LEAD = re.compile(r"(?:\b(?:is|are|was|were|went|goes?|going|gone|moved|ticked|edged|shot)\s+|[,:;(]\s*|^\s*)$", re.I)
 
 
 def rises_on_negatives(text, signed):
@@ -127,10 +131,12 @@ def rises_on_negatives(text, signed):
     for claim in extract(text):
         before = text[max(0, claim["at"] - 60):claim["at"]]
         rise = _RISE_BEFORE.search(before)
+        if rise and rise.group(1).lower() == "up" and not _UP_LEAD.search(before[:rise.start()]):
+            rise = None
         if rise:
             if _NOT.search(before[max(0, rise.start() - 20):rise.start()]):
                 continue  # "did not grow 12.5%"
-        elif not _RISE_AFTER.match(text[claim["end"]:claim["end"] + 40]) or re.search(r"[-−–(]\s*[$€£₹]?\s*$", before):
+        elif not _RISE_AFTER.match(text[claim["end"]:claim["end"] + 40]) or re.search(r"[-−–(][\s*_]*[$€£₹]?\s*$", before):
             continue  # no rise word next to it, or the reply shows the minus sign itself
         if (_matches(negative, claim["value"], claim["tol"], claim["percent"])
                 and not _matches(positive, claim["value"], claim["tol"], claim["percent"])):

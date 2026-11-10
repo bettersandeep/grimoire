@@ -371,7 +371,24 @@ def test_audit(tmp, db):
     tree = pkg.sqltree.parse("SELECT a, sum(b) / 86.5 FROM \"shop\".\"orders\" WHERE c = 'x' ORDER BY 2 DESC LIMIT 5")
     assert tree.source() == ("table", '"shop"."orders"', "orders") and tree.limit == 5 and tree.order[0][1], tree.source()
     assert pkg.sqltree.parse("SELECT 1; SELECT 2") is None and pkg.sqltree.parse("SELECT FROM WHERE") is None
-    assert pkg.sqltree.parse("SELECT 1 UNION ALL SELECT 2") is None
+    assert not pkg.sqltree.parse("SELECT 1 UNION ALL SELECT 2").plain and tree.plain
+    # FROM a, b with the join condition in WHERE: without the WHERE it is every pair of rows, so no count
+    q = saved("SELECT sum(o.amount) AS total FROM orders o, visits v WHERE o.customer_id = v.customer_id AND o.amount IS NOT NULL")
+    assert pkg.audit.assumptions(q, eng) == ["keeps only rows where o.customer_id = v.customer_id AND o.amount IS NOT NULL"], pkg.audit.assumptions(q, eng)
+    # a SEMI join keeps each row at most once: no double-count warning
+    q = saved("SELECT sum(o.amount) FROM orders o SEMI JOIN visits v ON o.customer_id = v.customer_id")
+    assert not any("join on" in w for w in pkg.audit.pitfalls(q, eng)), pkg.audit.pitfalls(q, eng)
+    # the unit of date_trunc in any letter case; a UNION keeps the checks that read the whole statement
+    q = saved("SELECT date_trunc('MONTH', day) AS m, sum(amount) AS t FROM orders GROUP BY 1 ORDER BY 1")
+    assert any("the last month (2026-02) has data only up to 2026-02-10" in w for w in pkg.audit.pitfalls(q, eng))
+    q = saved("SELECT strftime(day, '%Y-%m') AS m, sum(amount) / 86.5 AS t FROM orders GROUP BY 1 "
+              "UNION ALL SELECT strftime(day, '%Y-%m'), 1.0 FROM orders GROUP BY 1 ORDER BY 1 LIMIT 5")
+    found = pkg.audit.pitfalls(q, eng)
+    assert any("the last month (2026-02)" in w for w in found) and any(w.startswith("uses 86.5") for w in found), found
+    assert pkg.audit.assumptions(q, eng) == ["shows the top 5 only"], pkg.audit.assumptions(q, eng)
+    # a rate by its name, also in snake_case
+    rate = lambda name: bool(pkg.audit._RATE_NAME.search(name))
+    assert all(map(rate, ("conversion_rate", "pct_paid", "churn_ratio", "share", "Percentage"))) and not any(map(rate, ("separate", "duration", "shared")))
     assert "count_star()" in tree.count_sql() and "c = 'x'" in tree.count_sql() and "WHERE" not in tree.count_sql(where=False)
     assert "LIMIT 2" in tree.sql(limit=2) and "ORDER BY" not in tree.sql(order=False) and "LIMIT" not in tree.sql(order=False)
     # which files a query read: table names only, in any letter case, also in a UNION
@@ -379,6 +396,8 @@ def test_audit(tmp, db):
     assert tools._datasets_in("SELECT orders FROM visits", files) == ["visits"]  # a column named like a file
     assert tools._datasets_in("SELECT 1 FROM Orders UNION ALL SELECT 2 FROM visits_raw", files) == ["orders", "visits"]
     assert tools._datasets_in('SELECT 1 FROM "shop"."items"', files) == ["shop"]
+    assert tools._datasets_in("SELECT 1 FROM shop.orders", files) == ["shop"]  # the SQLite file, not the CSV file orders
+    assert tools._datasets_in("WITH orders AS (SELECT 1 FROM visits) SELECT * FROM orders", files) == ["visits"]  # a WITH name
     # the footer: verdict follows the number check and the warnings
     qid = run("SELECT sum(amount) AS total FROM orders WHERE amount IS NOT NULL")["id"]
     out = tools.check_reply(f"Total is 220 [{qid}].", "test")
@@ -923,6 +942,13 @@ def test_one_check_per_file_version(tmp, db):
         note = tools.check_reply(f"{reply} [{down['id']}].", "cite")
         assert "written as a rise" not in note and "ready to share" in note, (reply, note)
     assert verify.rises_on_negatives("Sales rose 5% and costs rose 5%.", [5.0, -5.0]) == []  # 5 is also a positive result
+    flips = lambda reply, results=(-12.5, -3.0): verify.rises_on_negatives(reply, list(results))
+    for reply in ("Revenue grew **12.5%**", "Revenue went up **12.5%**", "It grew by ~12.5%", "Revenue was 4.2M, up 12.5% on March",
+                  "a **12.5%** increase", "12.5% revenue growth"):
+        assert flips(reply) == ["12.5%"], reply
+    for reply in ("12.5% negative growth", "12.5% lower growth than last year", "Returns made up 12.5% of orders",
+                  "I set up 3 dashboards", "Revenue grew **-12.5%**", "up to 3 rows"):
+        assert flips(reply) == [], reply
     # a citation to a query that does not exist is not a receipt
     note = tools.check_reply("The file has 43 rows [q987654].", "cite")
     assert "cites q987654, which is not a saved query" in note and "share with caveats" in note, note
@@ -960,8 +986,8 @@ def test_restart(tmp):
     finally:
         engine._scan_files, engine._late_decimals, engine.Engine._rebuild = real
     assert again == first, (again, first)  # the skipped line and the wider type come from the saved scan
-    # one rebuild, and one more without the broken file; the one type read is the broken file's, which has no saved scan
-    assert counts == {"scan": 0, "types": 1, "rebuild": 2}, counts
+    # one rebuild, also with a broken file in the list; the one type read is the broken file's, which has no saved scan
+    assert counts == {"scan": 0, "types": 1, "rebuild": 1}, counts
     assert set(tools._get()[1].datasets) == {"late", "other"}
     assert call(tools.query, sql="SELECT sum(amount) AS total, (SELECT count(*) FROM other) AS n FROM late")["rows"] == [[3000000.4, 1]]
     late.write_text("id,amount\n1,5\n")  # a changed file is read again
@@ -990,6 +1016,19 @@ def test_restart(tmp):
     assert call(tools.attach, path=str(third))["tables"][0]["rows"] == 2
     assert "wide" not in tools._get()[1].datasets and "error" in call(tools.attach, path=str(good))
     assert call(tools.query, sql="SELECT count(*) FROM third")["rows"] == [[2]]
+    assert call(tools.catalog)["datasets"] and "wide" in [d["dataset"] for d in call(tools.catalog)["datasets"] if d.get("status")]
+    assert "error" not in json.loads(tools.query({"sql": "SELECT 1"}, session_id="test")) and commands.run("forget third").startswith("Deleted third")
+    # the last 50 chats with results and the last 50 without are kept apart: a chat that asked its question
+    # and has not called a tool yet is not pushed out by other chats
+    for i in range(49):
+        tools.remember(f"busy{i}", [i])
+    tools.remember_user_message("waiting", "show the top 5 of the 2,000 orders")
+    for i in range(30):
+        tools.remember_call(f"other{i}", tool_count=3)
+    assert tools._sessions["waiting"].message.startswith("show the top 5") and "busy0" in tools._sessions
+    for i in range(60):
+        tools.remember_call(f"more{i}", tool_count=3)
+    assert "waiting" not in tools._sessions and "busy0" in tools._sessions and len(tools._sessions) <= 100
     # a slow or failing audit count is remembered, not tried again on every reply
     eng, tries = tools._get()[1], []
     real_query = eng.query

@@ -50,9 +50,9 @@ def _tree(sql):
 
 
 def parse(sql):
-    """The Query for one plain SELECT statement; None for anything else (no parse, UNION, several statements)."""
+    """The Query for one statement; None when DuckDB cannot parse it or there are several."""
     tree = _tree(sql)
-    return Query(tree) if tree and tree["statements"][0]["node"]["type"] == "SELECT_NODE" else None
+    return Query(tree) if tree else None
 
 
 def tables(sql):
@@ -61,7 +61,9 @@ def tables(sql):
     tree = _tree(sql)
     if tree is None:
         return None
-    return {(d.get("schema_name") or "", d.get("table_name")) for d in _dicts(tree) if d.get("type") == "BASE_TABLE"}
+    helpers = {c.get("key") for d in _dicts(tree) if isinstance(d.get("cte_map"), dict) for c in d["cte_map"].get("map") or []}
+    found = {(d.get("schema_name") or "", d.get("table_name")) for d in _dicts(tree) if d.get("type") == "BASE_TABLE"}
+    return {(schema, table) for schema, table in found if schema or table not in helpers}  # a WITH name is not a table
 
 
 def _dicts(x, subqueries=True):
@@ -126,14 +128,28 @@ def _ref(table):
 
 
 class Query:
-    """One parsed SELECT."""
+    """One parsed statement. plain is True for one SELECT, and False for a UNION, INTERSECT or EXCEPT: those
+    have no single SELECT list, WHERE or FROM, but their functions, ORDER BY and LIMIT can still be read."""
 
     def __init__(self, tree):
         self.tree = tree
         self.node = tree["statements"][0]["node"]
-        self.select = self.node.get("select_list") or []
-        self.where = self.node.get("where_clause")
+        self.plain = self.node.get("type") == "SELECT_NODE"
+        self.select = (self.node.get("select_list") or []) if self.plain else []
+        self.where = self.node.get("where_clause") if self.plain else None
         self.ctes = [c.get("key") for c in (self.node.get("cte_map") or {}).get("map") or []]
+
+    @property
+    def selects(self):
+        """Every SELECT list at the top level: one, or one for each part of a UNION."""
+        return [d["select_list"] for d in _dicts(self.tree, subqueries=False) if d.get("select_list")]
+
+    @property
+    def countable(self):
+        """True when "the rows the query reads, without its WHERE" is a fair count: one SELECT whose joins all
+        carry their own condition. FROM a, b WHERE a.id = b.id is not: without the WHERE it is every pair."""
+        joins = [d for d in _dicts(self.node.get("from_table"), subqueries=False) if d.get("type") == "JOIN"]
+        return self.plain and all(j.get("ref_type") == "REGULAR" for j in joins)
 
     def _modifier(self, kind):
         return next((m for m in self.node.get("modifiers") or [] if m.get("type") == kind), None)
@@ -155,13 +171,14 @@ class Query:
         ("table", SQL reference, name) for one table or view;
         ("join", left reference, left name, right reference, right name, left key, right key) for two tables joined
         on one column each; ("helper", name) for a WITH result or a subquery; ("other",) for the rest."""
-        f = self.node.get("from_table") or {}
+        f = (self.node.get("from_table") or {}) if self.plain else {}
         if f.get("type") == "BASE_TABLE":
             name = f.get("table_name")
             return ("helper", name) if name in self.ctes and not f.get("schema_name") else ("table", _ref(f), name)
         if f.get("type") == "SUBQUERY":
             return ("helper", f.get("alias") or "a subquery")
-        if f.get("type") == "JOIN":
+        # only joins that can repeat rows: a SEMI or ANTI join keeps each left row at most once
+        if f.get("type") == "JOIN" and f.get("ref_type") == "REGULAR" and f.get("join_type") in ("INNER", "LEFT", "RIGHT", "FULL", "OUTER"):
             left, right = f.get("left") or {}, f.get("right") or {}
             if left.get("type") != "BASE_TABLE" or right.get("type") != "BASE_TABLE" or {left.get("table_name"), right.get("table_name")} & set(self.ctes):
                 return ("other",)
@@ -196,7 +213,11 @@ class Query:
         return _call("json_deserialize_sql", json.dumps(tree))
 
     def count_sql(self, where=True):
-        """SQL that counts the rows the query reads: the same WITH, FROM and joins, with or without its WHERE."""
+        """SQL that counts the rows the query reads: the same WITH, FROM and joins, with or without its WHERE.
+        None when that count is not a fair one (see countable)."""
+        if not self.countable:
+            return None
+
         def change(node):
             node.update(select_list=copy.deepcopy(_count_star()), modifiers=[], group_expressions=[], group_sets=[],
                         having=None, qualify=None, aggregate_handling="STANDARD_HANDLING")

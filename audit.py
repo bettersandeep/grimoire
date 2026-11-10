@@ -13,7 +13,8 @@ from . import engine, learning, sqltree
 AUDIT_TIMEOUT_S = 2  # per extra query; a slow check is skipped, the reply is never held up long
 MAX_QUERIES = 3      # audit at most the last 3 cited queries
 
-_RATE_NAME = re.compile(r"\b(?:pct|percent\w*|share|rate|ratio)\b", re.I)  # a result column named like a rate
+# a result column named like a rate: pct, conversion_rate, churn_ratio (not "separate" or "duration")
+_RATE_NAME = re.compile(r"(?:^|[^a-z])(?:pct|percent[a-z]*|share|rate|ratio)(?:$|[^a-z])", re.I)
 
 
 def _clause(parts, name):
@@ -121,7 +122,7 @@ def _buckets(tree, units, functions, formats):
     cols = []
     for name, call in sqltree.calls(tree.tree):
         args = sqltree.args(call)
-        if name == "date_trunc" and len(args) == 2 and sqltree.constant(args[0]) in units:
+        if name == "date_trunc" and len(args) == 2 and str(sqltree.constant(args[0])).lower() in units:
             cols.append(sqltree.column(args[1]))
         elif name in functions and args:
             cols.append(sqltree.column(args[0]))
@@ -155,10 +156,10 @@ def _time_zone(q, eng, tree):
 
 def _is_rate(tree, columns):
     """True when the outer SELECT divides by a count or a sum (not by 100 for units), or names a column like a rate."""
-    for name, call in sqltree.calls(tree.select, subqueries=False):
+    for name, call in sqltree.calls(tree.selects, subqueries=False):
         if name == "/" and any(n in ("count", "count_star", "sum") for n, _ in sqltree.calls(sqltree.args(call)[-1])):
             return True
-    names = [e.get("alias") or "" for e in tree.select] + list(columns or [])
+    names = [e.get("alias") or "" for items in tree.selects for e in items] + list(columns or [])
     return any(_RATE_NAME.search(n) for n in names)
 
 
@@ -183,7 +184,7 @@ def pitfalls(q, eng):
                    "so each total counts once")
     if not tree:
         return out
-    constants = _constants(tree.select)
+    constants = _constants(tree.selects)
     if constants:
         out.append(f"uses {', '.join(constants)}, written into the SQL, not taken from the data")
     months = _buckets(tree, ("month",), (), [lambda f: f == "%Y-%m"])

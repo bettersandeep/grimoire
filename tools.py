@@ -58,16 +58,18 @@ LEAN_TOOLS = store.LEAN_TOOLS
 
 
 def _session(session_id):
-    """This chat's record, made when new (call with _lock held). When there are too many, a chat that
-    never used Grimoire goes first, so a busy Hermes does not push out the chats that hold results."""
+    """This chat's record, made when new (call with _lock held). Kept: the last 50 chats that used Grimoire
+    and the last 50 that did not. Two limits, so other chats cannot push out a chat that holds results, or
+    one that sent its question and has not called a tool yet."""
     key = session_id or ""
     session = _sessions.get(key)
     if session is None:
         session = _sessions[key] = _Session()
     _sessions.move_to_end(key)
-    while len(_sessions) > _MAX_SESSIONS:
-        idle = next((k for k, s in _sessions.items() if not s.used and k != key), None)
-        _sessions.pop(idle if idle is not None else next(iter(_sessions)))
+    for used in (True, False):
+        same = [k for k, s in _sessions.items() if s.used == used]
+        for old in same[:-_MAX_SESSIONS]:
+            del _sessions[old]
     return session
 
 
@@ -723,8 +725,8 @@ def _datasets_in(sql, datasets):
     named = sqltree.tables(sql)
     if named is None:  # DuckDB gave no tree: fall back to every word of the SQL
         words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", sql.lower()))
-    else:
-        words = {part.lower() for pair in named for part in pair if part}
+    else:  # "db"."orders" reads the SQLite file db, not a CSV file named orders
+        words = {(schema or table).lower() for schema, table in named}
     return [n for n in datasets if n in words or f"{n}_raw" in words]
 
 

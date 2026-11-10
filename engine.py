@@ -48,14 +48,6 @@ class EngineError(Exception):
     """A problem the user or the model can fix (bad path, bad SQL, timeout)."""
 
 
-class _Broken(Exception):
-    """A file that could not be opened during a rebuild; dataset says which one."""
-
-    def __init__(self, dataset, cause):
-        super().__init__(str(cause))
-        self.dataset = dataset
-
-
 def _duckdb():
     """Import DuckDB on first use, so the plugin still loads (and explains) when it is missing."""
     try:
@@ -169,6 +161,7 @@ class Engine:
         self._widen = {}    # (path, mtime, size) -> {column: type} for whole-number columns with later decimals
         self._sqlite = {}   # (path, mtime, size) -> (temp folder, exported tables) for SQLite files
         self._unfinished = set()  # file versions whose type read timed out
+        self._left_out = {}       # dataset -> why the last rebuild could not open it
         self._con = None
         # ponytail: one lock for all sessions; per-connection cursors if gateway concurrency hurts.
         self._lock = threading.RLock()
@@ -201,19 +194,7 @@ class Engine:
                 self._sources[dataset] = (real, kind)
                 self._merges[dataset] = merges or {}
             if self._sources:
-                self._settle()
-
-    def _settle(self, adding=None):
-        """Rebuild. A file that broke after it was opened is left out, so one bad file never blocks the others
-        (the catalog lists it as unreadable). A failure of the dataset now being added goes to the caller."""
-        while True:
-            try:
-                return self._rebuild()
-            except _Broken as exc:
-                if exc.dataset == adding or exc.dataset not in self._sources:
-                    raise
-                self._sources.pop(exc.dataset)
-                self._merges.pop(exc.dataset, None)
+                self._rebuild()
 
     def _check(self, path, name, allow_private):
         """(real path, kind, dataset name) of a file, folder or pattern; EngineError when it cannot be opened."""
@@ -267,15 +248,17 @@ class Engine:
             self._sources[dataset] = (real, kind)
             self._merges[dataset] = merges or {}
             try:
-                self._settle(adding=dataset)
+                self._rebuild()
+                problem = self._left_out.get(dataset)
             except Exception as exc:
-                if previous[0] is None:
-                    self._sources.pop(dataset)
-                    self._merges.pop(dataset)
-                else:
+                problem = str(exc)
+            if problem is not None:  # put the old state back, then say why
+                self._sources.pop(dataset, None)
+                self._merges.pop(dataset, None)
+                if previous[0] is not None:
                     self._sources[dataset], self._merges[dataset] = previous
-                self._settle()
-                raise EngineError(f"Cannot read {shown}: {exc}") from exc
+                self._rebuild()
+                raise EngineError(f"Cannot read {shown}: {problem}")
         return dataset, kind
 
     def fresh(self, dataset):
@@ -295,21 +278,24 @@ class Engine:
             if self._sources.pop(dataset, None) is None:
                 raise EngineError(f"Unknown dataset '{dataset}'.")
             self._merges.pop(dataset, None)
-            self._settle()
+            self._rebuild()
 
     def set_merges(self, dataset, merges):
         """Replace the merge rules of an attached dataset and rebuild, so the next query follows them."""
         with self._lock:
             if dataset not in self._sources:
                 raise EngineError(f"Unknown dataset '{dataset}'. Attach it first.")
-            previous = self._merges.get(dataset)
+            source, previous = self._sources[dataset], self._merges.get(dataset)
             self._merges[dataset] = merges
             try:
-                self._settle(adding=dataset)
+                self._rebuild()
+                problem = self._left_out.get(dataset)
             except Exception as exc:
-                self._merges[dataset] = previous
-                self._settle()
-                raise EngineError(f"Cannot apply the merge: {exc}") from exc
+                problem = str(exc)
+            if problem is not None:
+                self._sources[dataset], self._merges[dataset] = source, previous
+                self._rebuild()
+                raise EngineError(f"Cannot apply the merge: {problem}")
 
     def merges(self, dataset):
         return dict(self._merges.get(dataset) or {})
@@ -329,16 +315,29 @@ class Engine:
             "memory_limit": _memory_limit(self._memory_share),
         })
         con.execute("SET enable_progress_bar = false")
-        tables, readable = {}, []
+        tables, readable, left_out = {}, [], {}
         for dataset, (path, kind) in self._sources.items():
             if not os.path.isfile(path) and not (is_many(path) and files_of(path)):
-                continue  # the file was deleted or moved: drop its table, keep every other dataset working
+                left_out[dataset] = "the file is gone"
+                continue
             try:
                 tables[dataset], files = self._open(con, dataset, path, kind, self._merges.get(dataset) or {})
             except Exception as exc:
-                con.close()
-                raise _Broken(dataset, exc) from exc
+                left_out[dataset] = str(exc)
+                for half_made in (f"DROP VIEW IF EXISTS {ident(dataset)}", f"DROP VIEW IF EXISTS {ident(dataset + '_raw')}",
+                                  f"DROP SCHEMA IF EXISTS {ident(dataset)} CASCADE"):
+                    try:
+                        con.execute(half_made)
+                    except Exception:
+                        pass
+                continue
             readable.extend(files)
+        # A file that is gone or broke is left out, so one bad file never blocks the others. It is no longer
+        # an open dataset (the catalog lists it as missing); naming it again attaches it again.
+        for dataset in left_out:
+            self._sources.pop(dataset)
+            self._merges.pop(dataset, None)
+        self._left_out = left_out
         con.execute("SET allowed_paths = ?", [readable])
         con.execute("SET enable_external_access = false")
         con.execute("SET lock_configuration = true")
