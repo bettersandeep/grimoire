@@ -40,12 +40,16 @@ def _alias(item):
 def describe(item):
     """Plain words for one SELECT item that computes something; None for a plain column."""
     words = []
-    if re.search(r"\bcount\s*\(\s*\*\s*\)", item, re.I):
+    if m := re.search(r"\bcount\s*\(\s*\*\s*\)\s*FILTER\s*\(\s*WHERE\s+(.*)\)", item, re.I):
+        cond = re.sub(r"\s+IS\s+NOT\s+NULL\b", " is not empty", m.group(1).strip(), flags=re.I)
+        cond = re.sub(r"\s+IS\s+NULL\b", " is empty", cond, flags=re.I)
+        words.append(f"counted rows where {audit._plain(cond)}")
+    elif re.search(r"\bcount\s*\(\s*\*\s*\)", item, re.I):
         words.append("counted rows")
     elif m := re.search(r"\bcount\s*\(\s*DISTINCT\s+\"?(\w+)", item, re.I):
         words.append(f"counted different {m.group(1)} values")
     elif m := re.search(r"\bcount\s*\(\s*\"?(\w+)", item, re.I):
-        words.append(f"counted rows that have a {m.group(1)}")
+        words.append(f"counted rows where {m.group(1)} is not empty")
     if m := re.search(r"\bcount_if\s*\(([^)]*)\)", item, re.I):
         words.append(f"counted rows where {m.group(1).strip()}")
     for fn, text in _AGG:
@@ -113,22 +117,9 @@ def steps(q, eng):
                 lines.append(f"{lead} {name + ': ' if name else ''}{text}")
         order = clause.get("ORDER BY")
         if order:
-            body = order[len("ORDER BY"):].strip()
-            first = body.split(",")[0].strip()
+            first = order[len("ORDER BY"):].strip().split(",")[0].strip()
             key = re.sub(r"\s+(ASC|DESC)(\s+NULLS\s+(FIRST|LAST))?\s*$", "", first, flags=re.I).strip()
-            col = key
-            if key.isdigit() and int(key) <= len(select_items):
-                col = _alias(select_items[int(key) - 1]) or key
-            else:  # an expression that a SELECT item computes: use that item's name
-                flat = lambda t: re.sub(r"\s+", "", t).lower()
-                for item in select_items:
-                    expr = re.sub(r"\s+AS\s+\"?\w+\"?\s*$", "", item, flags=re.I)
-                    if _alias(item) and flat(key) in flat(expr):
-                        col = _alias(item)
-                        break
-                else:
-                    col = describe(key) or key
-            col = col.strip(chr(34))
+            col = (_order_name(order, select_items) or describe(key) or key).strip(chr(34))
             down = bool(re.search(r"DESC", first, re.I))
             i = q["columns"].index(col) if col in q["columns"] else None
             if i is not None and q["rows"] and isinstance(q["rows"][0][i], str):  # names sort A to Z, not low to high
@@ -146,16 +137,27 @@ def steps(q, eng):
     return out
 
 
-def _sort_column(order, cols, nums):
-    """Index of the number column the first ORDER BY key names (by position or by name), else None."""
-    m = re.match(r"ORDER\s+BY\s+(\"[^\"]+\"|[\w.]+)", order, re.I)
-    if not m:
-        return None
-    key = m.group(1).strip('"')
+def _order_name(order, select_items):
+    """Name of the SELECT item the first ORDER BY key sorts on: by position, name or the same expression."""
+    first = order[len("ORDER BY"):].strip().split(",")[0].strip()
+    key = re.sub(r"\s+(ASC|DESC)(\s+NULLS\s+(FIRST|LAST))?\s*$", "", first, flags=re.I).strip()
     if key.isdigit():
         i = int(key) - 1
-        return i if i in nums else None
-    return next((i for i in nums if cols[i].lower() == key.split(".")[-1].lower()), None)
+        return (_alias(select_items[i]) or select_items[i].strip()) if i < len(select_items) else None
+    flat = lambda t: re.sub(r"\s+", "", t).lower().strip('"')
+    for item in select_items:
+        expr = re.sub(r"\s+AS\s+\"?\w+\"?\s*$", "", item, flags=re.I)
+        name = _alias(item) or item.strip()
+        if flat(key) in (flat(name), flat(name.split(".")[-1])) or (_alias(item) and flat(key) in flat(expr)):
+            return name
+    return None
+
+
+def _sort_column(order, cols, nums, select_items):
+    """Index of the number column the rows are sorted by, else None."""
+    name = _order_name(order, select_items) if order else None
+    name = name.strip('"').split(".")[-1].lower() if name else None
+    return next((i for i in nums if cols[i].lower() == name), None)
 
 
 def _result(q, eng, parts):
@@ -170,7 +172,7 @@ def _result(q, eng, parts):
     if not nums or not labels:
         return f"Result: {len(rows):,} rows."
     li, vi = labels[0], nums[0]  # the first measure, unless the rows are sorted by another one
-    key = _sort_column(dict(parts).get("ORDER BY", ""), cols, nums)  # compare on the column the rows are sorted by
+    key = _sort_column(dict(parts).get("ORDER BY", ""), cols, nums, split_list(dict(parts).get("SELECT", "")))  # compare on the column the rows are sorted by
     if key is not None:
         vi = key
     top = rows[0]
@@ -187,7 +189,8 @@ def _result(q, eng, parts):
         elif isinstance(a, (int, float)) and isinstance(b, (int, float)) and b:
             pct = (a - b) / abs(b) * 100
             word = "more" if pct >= 0 else "less"
-            line += f"; {abs(pct):.1f}% {word} than {second[li]} ({_fmt(b)})"
+            gap = f"{abs(pct):.1f}%" if abs(pct) >= 0.1 else _fmt(abs(a - b))  # a tiny gap reads better as a number
+            line += f"; {gap} {word} than {second[li]} ({_fmt(b)})"
     elif len(rows) > 1:
         line = f"Result: {len(rows):,} rows; first is " + line[len("Result: "):]
     return line
