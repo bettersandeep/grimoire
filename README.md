@@ -2,191 +2,254 @@
 
 ![Grimoire, a Hermes Agent plugin by bettersandeep: every number in the answer has a receipt.](assets/banner.jpg)
 
-A Hermes Agent plugin for learning and exploring data with fewer tokens.
+Ask Hermes about your data files, and get answers that are fast, cheap and checked.
 Every number has a receipt.
 
-Ask Hermes about a CSV, JSON, Parquet or SQLite file.
-Grimoire opens it in DuckDB, answers with SQL, saves each query with an id like `q12`, and checks every number in the reply against the query results.
+- **Fast and light:** DuckDB answers with one SQL query, so the model never reads your rows.
+  Same question, same free model: 18 s instead of 48 s, and half the input tokens.
+- **Checked:** after each reply, Grimoire checks every number against the query results and flags the ones with no source.
+- **Charts with no tokens:** a Data page in Hermes Desktop with ten chart views, pivots, drill-down and a health score for each file.
+- **Learning mode:** see how each answer was made, step by step, in plain words or SQL.
 
-```
-You:     What is the total revenue per region in ~/grimoire-bench/sales_50k.csv?
-         amount_cents is in US cents. Answer in one short line, in millions of dollars.
-Hermes:  North 2,905.17M; South 2,453.49M; West 1,993.43M; East 1,942.55M;
-         north  304.38M; N. Region 93.79M [q42].
-         ---
-         Grimoire check: 0 of 6 numbers trace to query results. No source query for:
-         2,905.17M · 2,453.49M · 1,993.43M · 1,942.55M · 304.38M · 93.79M.
-         Verdict: needs revision.
-```
+Works with CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet and SQLite files, and with a folder or pattern such as `sales_*.csv` read as one table.
 
-A real answer (free model, 2026-11-09): the model forgot to divide cents by 100.
-Query q42 says North made $29.05M, not $2,905M, and Grimoire flagged every number.
+## Contents
 
-## Install
+- [Quick start](#quick-start)
+- [Ask in chat](#ask-in-chat)
+- [The Data page](#the-data-page)
+- [Modes](#modes)
+- [Commands](#commands)
+- [Speed and tokens](#speed-and-tokens)
+- [All features](#all-features)
+- [What it can access, and what it stores](#what-it-can-access-and-what-it-stores)
 
-```sh
-hermes plugins install bettersandeep/grimoire --enable
-```
+## Quick start
 
-Hermes asks before it installs the one dependency, `duckdb`.
-Needs Hermes 0.23.0 or later and Python 3.11 or later.
-Update with `hermes plugins update grimoire`.
+1. **Install** in a terminal:
 
-## Optional: a Data bot for fewer tokens
+   ```sh
+   hermes plugins install bettersandeep/grimoire --enable
+   ```
 
-Grimoire works in any chat, with all your other tools. You do not need this.
+   Hermes asks before it installs the one dependency, `duckdb` (1.4.2 or later, 2.x works).
+   You need Hermes 0.23.0 or later and Python 3.11 or later.
+   Update later with `hermes plugins update grimoire`.
 
-Most of the tokens in an answer are Hermes's own system prompt and tool list, sent with every model call (about 11,000 tokens, mostly cached).
-A Data bot loads only Grimoire's tools, so each call sends about a fifth of that.
-Your main agent keeps all its tools.
-Grimoire never changes your settings; it only tells you how.
+2. **Turn on the Data page** in Hermes Desktop (optional).
+   Open **Capabilities**, then **Plugins**, search for `grimoire`, and switch it **On**.
+   A **Data** entry appears in the sidebar.
 
-In Hermes Desktop:
+3. **Ask about a file** in any chat, with its path:
 
-1. Open the **Bots** tab, click **+**, then **New bot**. Name it data.
-2. Click **Advanced** (below Description). Under **General**, clone from the profile that has Grimoire (usually default).
-3. Open **Capabilities**, then **Tools**. Scroll down to the **Build for Hermes** box and switch off the switch in it: this switches off all tools.
-   Then type `grimoire` in the search box and switch on **Grimoire**. Do the same for `clarif` (**Clarifying Questions**).
-   Leave Skills off: it doubles the tokens of every call (measured: 2,214 to 4,532), and Grimoire adds the SQL recipe a question needs by itself.
-4. Click **Create bot**, then ask data questions in the data bot's chat.
+   ```
+   How many taxi trips are in ~/data/yellow_2024-*.parquet, and what was the average fare?
+   ```
 
-Already made a bot? Open its menu, choose **Edit…**, then **Advanced** and **Capabilities**.
+   Grimoire opens the file before the model starts, the model answers with one query, and a check line appears under the answer.
 
-In a terminal: `hermes chat -t grimoire,clarify`.
+## Ask in chat
 
-`/grimoire setup` shows the steps again, and `/grimoire` shows the numbers for the current chat.
+Name a data file in your message and ask your question in plain words.
+You do not need to set anything up, and all your other Hermes tools keep working.
 
-Same question, same free model, measured on 2026-11-09:
+![A chat answer with Grimoire's check under it: 6 of 7 numbers trace, one made-up total, and one region spelled three ways.](assets/screenshots/chat-check.png)
 
-| | Hermes default tools | Data bot (Grimoire's tools only) |
-|---|---|---|
-| Tokens per answer | about 23,300 | about 4,300 (82% fewer) |
-| Correct, 8 benchmark questions | 8 of 8 | 8 of 8 |
-| Time per answer | 15 to 22 s | about 13 s |
-| Time spent in Grimoire and DuckDB | under 0.3 s | under 0.3 s |
+Each answer cites its query, like `[q3]`.
+Under the answer, Grimoire adds its check:
 
-Almost all of the remaining time is the model writing; a faster model answers faster.
-DuckDB runs these queries in 40 to 60 ms.
-
-## What it does
-
-| | |
+| Line | Means |
 |---|---|
-| Reads files | CSV, TSV, JSON, NDJSON (also `.gz` and `.zst`), Parquet, SQLite; a folder or `sales_*.csv` pattern as one table |
-| Answers in one step | When your message names a file, Grimoire opens it before the model starts, so the model answers with one query |
-| Answers with SQL | DuckDB in memory; the model sees schemas and small results, never the rows |
-| Saves receipts | Every query, its SQL and result, with an id the answer cites |
-| Checks numbers | After each reply: which numbers trace to query results, which are derived by simple arithmetic, and which have no source |
-| Checks the method | Under the answer: what the query left out ("left out 1,996 of 50,000 rows (empty amount)"), common mistakes (one value spelled two ways in the result, an incomplete last month, an average of averages, a join that counts rows twice, a rate compared across periods whose row counts differ a lot), which clock day and hour buckets use and a verdict: ready to share, share with caveats, or needs revision |
-| Finds data problems | Malformed lines, duplicate rows, empty values, numbers or dates stored as text, one value written differently (case and spaces, a one-letter typo of a rare label, a rare abbreviation such as 'Calif.' for 'California'), placeholder text ('N/A', '-'), placeholder numbers (9999), negative amounts, future dates, a column with one value; a health score out of 100 that lists every point taken off |
-| Column statistics | Quantiles, outliers, top values, rows per month |
-| Shape of the data | Which columns are dimensions, metrics and time; metrics that move together; ID columns that join to other attached files, with the share that matches |
-| Explains changes | "Why did revenue drop in March?": the total change split by each category column, with each segment's share |
-| Tests differences | "Is North really different from South, or chance?": Welch's t-test for averages, a two-proportion z-test for rates, with an exact p-value and plain words; it warns about small groups and that a difference is not a cause |
-| Charts and reports | A bar chart in any chat; an HTML report where every number shows its SQL, with a file filter and search, tables that sort by any column, caveats under each result, and an "About the data" part (health, data problems, column notes, saved metrics). The chart fits the result: line for time, heatmap for two labels and a number (weekday by hour), histogram for equal buckets, scatter for two numbers, bars otherwise |
-| Remembers | Files, column notes and merge rules across sessions |
-| Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
-| Teaches (opt-in) | Plain words (default): how each answer was made, step by step, with the row count at each step and the result in context ("18.4% more than South"). SQL: one SQL idea per answer. Both end with a better question to ask next; optional "guess first" predictions |
+| `Grimoire check: all 2 numbers trace to query results` | Every number in the reply comes from a query result, or from simple arithmetic on numbers the reply shows |
+| `No source query for: 33.02M` | The model wrote a number that no query produced. Here it added three numbers itself instead of in SQL |
+| `Check how these were worked out: …` | The number only matches by combining two values the reply does not show, so it may be a coincidence |
+| `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
+| `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
+| `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
+
+A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.
+Query q42 said $29.05M, and Grimoire flagged every number in the reply.
+
+To see the SQL and result behind any number, type `/grimoire sql q3`.
+
+## The Data page
+
+Hermes Desktop gets a **Data** page with your files, every saved query, and the learning switches.
+Everything on this page runs on your computer and uses no model tokens.
+
+![The Data page: two files with their health scores and data problems, and the saved queries with a result.](assets/screenshots/data-page.png)
+
+### Data health
+
+Each file gets a score out of 100 for how far you can trust its numbers.
+Click the score to see every point taken off and what to do about it.
+
+![The Data health explanation for the NYC taxi data: 83 of 100, with 15,440 negative fares listed.](assets/screenshots/data-health.png)
+
+Grimoire looks for malformed lines, duplicate rows, empty values, numbers stored as text, one value written in different ways, placeholders such as 'N/A' or 9999, negative amounts and future dates.
+Files up to 1,000,000 rows are checked as soon as you name them; the Data page checks larger ones when you open it.
+
+### Charts
+
+Every saved query opens with a chart that fits its result, with tabs for **Chart**, **Table**, **SQL** and **How it was made**.
+One click switches the chart type, and hovering a mark shows its value.
+
+![Six chart views: a weekday by hour heatmap, a scatter, a histogram, an area chart, a donut and a pivot table.](assets/screenshots/charts.png)
+
+| Result shape | Chart |
+|---|---|
+| A date and a number | Line or area, with the latest value and its change |
+| A label and a number | Bars, columns or donut (up to 6 parts) |
+| Two labels and a number | Heatmap and pivot table |
+| Equal buckets and counts | Histogram |
+| Two numbers | Scatter |
+| One row of numbers | Number tiles |
+
+Tables keep the same decimals in a column and show a bar behind each number.
+
+### New chart and drill-down
+
+Click **+ New chart** to make a chart without the model.
+Pick a file, a measure (count, total, average, smallest, largest), what to group by (a column, or a date per day, month or year), an optional second group for a pivot, and an optional filter.
+Grimoire writes the SQL, runs it, and saves it as a query, so it can be checked like any answer.
+
+Click a bar, column or slice to look inside it: the form opens with that value as the filter.
+
+![The New chart form, opened by clicking the North bar: only rows where region is North, total of amount_cents.](assets/screenshots/new-chart.png)
+
+## Modes
+
+### Normal chat (default)
+
+Grimoire works in any chat, next to your other tools.
+Nothing to switch on.
+
+### Learning mode
+
+Learning mode adds a card under each answer that explains how it was made.
+Switch it on with the **Learning mode** switch on the Data page, or type `/grimoire learn on`.
+
+![The Learning mode switch on the Data page, turned on.](assets/screenshots/learning-switch.png)
+
+| Style | Switch | The card shows |
+|---|---|---|
+| Plain words (default) | **Plain words** on the Data page, or `/grimoire learn plain` | Each step with its row count ("Kept rows where …: 48,004 rows"), the result in context ("18.4% more than South"), and a better question to ask next |
+| SQL | **SQL** on the Data page, or `/grimoire learn sql` | One SQL idea per answer, taken from the query that produced it |
+| Predictions | **Predictions** on the Data page, or `/grimoire learn predict on` | Grimoire asks you to guess the main number first, then scores your guess |
+
+![A learning card under an answer: five numbered steps with row counts, the result, and a question to ask next.](assets/screenshots/learning-card.png)
+
+`/grimoire explain q12` shows each step next to its SQL.
+Turn learning mode off with the same switch or `/grimoire learn off`.
+
+### Optional: a lean Data bot
+
+Hermes sends its system prompt and every tool with each model call.
+A Desktop bot with only Grimoire's tools sends about a fifth of that.
+You do not need this; it only saves tokens.
+
+1. In Hermes Desktop, open **Bots**, click **+**, then **New bot**. Name it data.
+2. Click **Advanced**, and under **General** clone from the profile that has Grimoire.
+3. Open **Capabilities**, then **Tools**. Switch off the switch in the **Build for Hermes** box (all tools), then switch on **Grimoire** and **Clarifying Questions**.
+4. Click **Create bot**.
+
+In a terminal, the same setup is `hermes chat -t grimoire,clarify`.
+`/grimoire setup` shows these steps, and `/grimoire` shows the tools and tokens of the current chat.
 
 ## Commands
 
-Type these in any Hermes chat. They run plugin code only, so they cost no tokens.
+Type these in any Hermes chat.
+They run plugin code only, so they cost no tokens.
 
 | Command | Does |
 |---|---|
-| `/grimoire` | Status: version, files, learning mode |
+| `/grimoire` | Status: version, files, learning mode, tokens of this chat |
 | `/grimoire sql q12` | The SQL and result behind a number |
 | `/grimoire explain q12` | How your question became that SQL |
-| `/grimoire chart q12` | A bar chart of a result |
+| `/grimoire chart q12` | A bar chart of a result, in the chat |
 | `/grimoire rerun q12` | Run the SQL again and check the result still holds |
-| `/grimoire report [dataset]` | Save an HTML report of the last session's queries, or of one file's |
-| `/grimoire define revenue = sum(amount_cents) / 100` | Save a metric; answers then compute "revenue" the same way every time |
-| `/grimoire metrics` / `undefine <name>` | List or remove saved metrics |
-| `/grimoire learn on` / `off` | Learning mode |
-| `/grimoire learn plain` / `sql` | Lesson style: plain-words steps (default) or one SQL idea |
-| `/grimoire learn predict on` / `off` | Guess the answer before you see it |
+| `/grimoire report [file]` | Save an HTML report of the last session's queries, or of one file's |
+| `/grimoire define revenue = sum(amount_cents) / 100` | Save a metric, so "revenue" is computed the same way every time |
+| `/grimoire metrics`, `/grimoire undefine <name>` | List or remove saved metrics |
+| `/grimoire learn on`, `off`, `plain`, `sql` | Learning mode and its style |
+| `/grimoire learn predict on`, `off` | Guess the answer before you see it |
 | `/grimoire rejects` | Malformed lines that were skipped |
-| `/grimoire merges` | Merge rules, applied and waiting |
-| `/grimoire merges approve` / `reject` | Apply or drop the merges the model proposed |
-| `/grimoire unmerge <dataset> [column]` | Remove merge rules |
-| `/grimoire forget <dataset>` | Delete everything saved about one file |
+| `/grimoire merges`, `merges approve`, `merges reject` | See, apply or drop merges the model proposed (for example 'north ' into 'North') |
+| `/grimoire unmerge <file> [column]` | Remove merge rules |
+| `/grimoire forget <file>` | Delete everything saved about one file |
 | `/grimoire clear history` | Delete all saved queries and results |
 | `/grimoire reset confirm` | Delete everything Grimoire saved |
-| `/grimoire setup` | How to use fewer tokens with a Data bot |
+| `/grimoire setup` | How to set up the optional Data bot |
 
-## Hermes Desktop
+The HTML report shows every number with its SQL, sortable tables, the right chart for each result, caveats, and an "About the data" part.
 
-Grimoire adds a **Data** page to Hermes Desktop: your files with their size, health and data problems, merges waiting for approval, learning toggles, and every saved query.
-Each query has tabs for Chart, Table, SQL and How it was made.
-You can switch the chart type (bars, columns, line, area, donut) and pick which number to show; hover a mark to see its value.
-Tables keep the same decimals in a column and show a bar behind each number.
-**New chart** makes your own chart without a model: pick a file, a measure (count, total, average, smallest, largest), what to group by (a column, or a date per day, month or year) and an optional filter.
-Grimoire writes the SQL, runs it and saves it as a query, so the chart can be checked like any answer.
-Add a second group ("And by") for a **Pivot** table and a heatmap.
-Click a bar, column or slice to look inside it: a new chart with only those rows.
-A chart over time shows the latest value and its change from the period before.
-**Data health** is a score out of 100 for how far you can trust a file's numbers; click it to see every point taken off.
-Small files (up to 1,000,000 rows) are checked as soon as you name them, and the Data page checks larger ones when you open it.
-Checks and charts on the Data page run on your computer and use no model tokens.
-Like every Desktop plugin it starts off; turn it on under **Capabilities → Plugins**.
+![An HTML report with charts and the SQL behind each number.](assets/screenshots/report-charts.png)
 
-## Tools the model gets
+## Speed and tokens
 
-`grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_drivers`, `grimoire_compare`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.
+One real run in Hermes Desktop: the same question on 20.3M rows of NYC taxi data, the same free model.
 
-## Benchmark
+![Plain Hermes and Hermes with Grimoire side by side: 48 s, 87,464 input tokens and 5 tool calls against 18 s, 41,997 input tokens and 2 tool calls.](assets/screenshots/race.png)
 
-Same 8 questions on the same free model, with and without Grimoire ([details](bench/RESULTS.md)), measured on 2026-11-09 with Grimoire 0.19:
+The benchmark repeats this over many questions, with medians ([details](bench/RESULTS.md)).
+Input tokens include cached tokens.
 
 | | Plain Hermes | Hermes with Grimoire | Data bot |
 |---|---|---|---|
-| Correct | 8 of 8 | 8 of 8 | 8 of 8 |
-| Input tokens (median) | 65,362 | 23,572 (64% fewer) | 4,436 (93% fewer) |
+| Correct, 8 questions on a 50k-row sales file | 8 of 8 | 8 of 8 | 8 of 8 |
+| Input tokens per answer | 65,362 | 23,572 (64% fewer) | 4,436 (93% fewer) |
 | Time per answer | 33 s | 15 s | 16 s |
-| Cost per answer, at $3/$15 per million | $0.046 | $0.024 | $0.013 |
-| Tool calls | 4 | 1 | 1 |
-
-One Data bot answer wrote a stray "25,000" before correcting itself to 2,500 customers; the number check flagged it.
-
-Run it yourself with `bench/make_data.py` and `bench/run.py`; the example above uses `sales_50k.csv` from it.
-
-On real public data, NYC taxi trips January to June 2024 (20.3M rows, 6 Parquet files), with Grimoire 0.19:
-
-| | Plain Hermes | Hermes with Grimoire | Data bot |
-|---|---|---|---|
-| Correct | 6 of 6 | 6 of 6 | 6 of 6 |
-| Input tokens (median) | 123,437 | 23,866 | 5,037 (96% fewer) |
+| Correct, 6 questions on 20.3M taxi rows | 6 of 6 | 6 of 6 | 6 of 6 |
+| Input tokens per answer | 123,437 | 23,866 (81% fewer) | 5,037 (96% fewer) |
 | Time per answer | 75 s | 12 s | 12 s |
-| Tool calls | 10 | 1 | 1 |
+| Tool calls per answer (taxi) | 10 | 1 | 1 |
 
-The 2 GB CSV of the same rows gives the same picture ([details](bench/RESULTS.md)).
-Run it with `bench/run.py run --set nyc --sizes parquet,csv --setups plain,grimoire,databot`.
+Grimoire and DuckDB take under 0.3 s of each answer; the rest is the model writing.
+Run the benchmark yourself with `bench/make_data.py` and `bench/run.py`.
+
+## All features
+
+| | |
+|---|---|
+| Answers in one step | When your message names a file, Grimoire opens it before the model starts, so the model answers with one query |
+| Answers with SQL | DuckDB in memory; the model sees table names, columns and small results, never the rows |
+| Saves receipts | Every query, its SQL and result, with an id the answer cites |
+| Checks numbers | Which numbers trace to query results, which come from simple arithmetic, and which have no source |
+| Checks the method | Rows a filter left out, one value spelled two ways, an incomplete last period, an average of averages, a join that counts rows twice, a rate compared across periods with very different row counts, and the clock that day and hour buckets use |
+| Finds data problems | See [Data health](#data-health); a score out of 100 with every point explained |
+| Column statistics | Quantiles, outliers, top values, rows per month |
+| Shape of the data | Dimensions, metrics and time columns; metrics that move together; ID columns that join to other files |
+| Explains changes | "Why did revenue drop in March?": the change split by each category column |
+| Tests differences | "Is North really different from South?": Welch's t-test or a two-proportion z-test, in plain words |
+| Remembers | Files, column notes, merge rules and saved metrics across sessions |
+| Stops raw reads | Blocks `read_file` on data files over 256 KB and points the model to Grimoire |
+
+The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_query`, `grimoire_drivers`, `grimoire_compare`, `grimoire_note`, `grimoire_merge`, `grimoire_catalog`, and the skill `grimoire:explore-data`.
 
 ## What it can access, and what it stores
 
-- **Files:** only the files the model attaches, read only. Inside DuckDB, all other file access, network access, extension loading and setting changes are off and locked.
+- **Files:** only the files you or the model name, read only. Inside DuckDB, all other file access, network access, extension loading and setting changes are off and locked.
 - **Private folders:** files in `~/.hermes`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, `~/.kube`, `~/.docker` and `~/Library` are refused (iCloud Drive and other cloud folders in `~/Library` are allowed). To allow them, set `plugins.entries.grimoire.settings.allow_private_folders: true`.
 - **Your files never change.** Merge rules apply inside Grimoire only.
+- **SQLite files** are copied to a temporary folder as CSV, once per file version, and loaded into DuckDB from there.
 - **Reports** are written to `~/.hermes/plugin-data/grimoire/reports/` only when you run `/grimoire report`.
-- **Opening files before the model starts:** when your message names a data file that exists, Grimoire opens it (read only, same rules as above) and gives the model its table name and columns.
 - **Stored in** `~/.hermes/plugin-data/grimoire/data.db`: file paths, column types and profiles, your column notes, merge rules, settings, and every query with up to 200 result rows and the question that led to it. Delete with `/grimoire forget`, `clear history` or `reset confirm`. Hermes keeps its own chat history, which also contains tool results.
-- **Network:** none. Grimoire makes no network calls; your model provider sees what the model sees, as with any Hermes tool.
-- **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (adds a one-line hint when a message names a data file, and the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the number check and, when on, the learning card), `pre_api_request` and `post_api_request` (keep two numbers per model call in memory, the tool count and the provider's input token count, to show what a chat costs; no message content).
-- **Limits:** queries stop after 30 s; DuckDB may use half of your memory; results are capped at 200 rows; SQLite files over 2 GB are refused.
+- **Network:** none. Your model provider sees what the model sees, as with any Hermes tool.
+- **Hooks:** `pre_tool_call` (blocks raw reads of large data files), `pre_llm_call` (opens a named data file and adds its table and columns; the prediction prompt when that is on), `post_tool_call` (reads your answer to a prediction question), `transform_llm_output` (adds the check and, when on, the learning card), `pre_api_request` and `post_api_request` (keep the tool count and input token count of each model call in memory for `/grimoire`; no message content).
+- **Limits:** queries stop after 30 s; the chat's DuckDB may use half of your memory and the Data page's an eighth per file; results are capped at 200 rows; SQLite files over 2 GB are refused.
 
 ## Safety
 
 - Only one SELECT statement per query, decided by DuckDB's own parser.
-- The model can propose merging values, but only you can apply it (`/grimoire merges approve`).
-- Tool results tell the model that file values are data, not instructions. A file can still contain text that tries to steer the model; review answers about files you did not create.
-- Security review: [findings and fixes](https://github.com/bettersandeep/grimoire/pull/18).
+- The model can propose merging values, but only you can apply them (`/grimoire merges approve`).
+- Table, column and value names from a file reach the model marked as data, and long values are cut. A file can still contain text that tries to steer the model; review answers about files you did not create.
+- Security reviews: [first review](https://github.com/bettersandeep/grimoire/pull/18), [fixes from the second review and the Hermes security scan](https://github.com/bettersandeep/grimoire/pull/84).
 
 ## Known limits
 
-- The number check reads digits only. Number words ("three") and text claims (names, rankings) are not checked.
-- A small number can match a query value by chance.
-- Plain powers of ten (100, 1000) are skipped as claims, because they are usually unit factors.
-- Numbers from two arithmetic steps, or from a query the answer does not cite, are flagged even when right. In the benchmark replay, 3 of 40 correct answers had a flag.
+- The check reads digits only. Number words ("three") and text claims (names, rankings) are not checked.
+- A small number can match a query value by chance; numbers that only match by combining hidden values are marked for a check.
+- Numbers from two arithmetic steps, or from a query the answer does not cite, are flagged even when right.
 - Session values live in memory; after a restart only cited query ids are checked.
 - Profiles of tables over 1 million rows use a 1 million row sample.
 - Excel files are not supported, because DuckDB would need to download an extension. Save as CSV.
@@ -197,6 +260,8 @@ Run it with `bench/run.py run --set nyc --sizes parquet,csv --setups plain,grimo
 python -I selftest.py                         # needs duckdb
 hermes plugins validate . --install-deps
 ```
+
+CI runs the self-test on Python 3.11 with DuckDB 1.4.2, and on Python 3.13 with DuckDB 1.5 and 2.x.
 
 MIT license.
 
