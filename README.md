@@ -217,7 +217,8 @@ Input tokens include cached tokens.
 Grimoire is fastest against plain Hermes on large CSV files (5x to 19x); on Parquet plain Hermes is closer (1.2x to 2.5x).
 On most tests Grimoire uses fewer tokens; in 3 of 18 tests plain Hermes used up to 5% fewer.
 The optional Data bot, with only Grimoire's tools, used 4,400 to 5,000 input tokens per answer in an earlier run on a free model.
-Run the benchmark yourself with `bench/make_data.py` and `bench/run.py`.
+Run the benchmark yourself with `bench/make_data.py` and `bench/run.py run`; it uses a free model by default (`meituan/longcat-2.5:free`), so it needs no paid model.
+`bench/run.py report --out bench/results-claude.jsonl` summarises the saved results with no model at all.
 
 ## All features
 
@@ -273,11 +274,13 @@ The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_que
 ## Development
 
 ```sh
-python -I selftest.py                         # needs duckdb
+python -I selftest.py                         # needs duckdb; runs the 23 tests in any folder
+python -m pytest                              # the same tests with pytest; the folder name must be a Python name
 hermes plugins validate . --install-deps
 ```
 
-CI runs the self-test on Python 3.11 with DuckDB 1.4.2, and on Python 3.13 with DuckDB 1.5 and 2.x.
+The tests share one folder and one database and run in file order (`make_env` in `selftest.py`).
+CI runs them with pytest on Python 3.11 with DuckDB 1.4.2, and on Python 3.13 with DuckDB 1.5 and 2.x, with deprecation warnings as errors.
 
 MIT license.
 

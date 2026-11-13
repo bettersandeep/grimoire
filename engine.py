@@ -135,7 +135,7 @@ def dataset_name(path, name=None):
     if os.path.isdir(text):
         base = Path(text).name
     elif is_many(text):
-        stem = re.split(r"[*?\[]", Path(text).name, 1)[0].split(".", 1)[0].rstrip("_-")
+        stem = re.split(r"[*?\[]", Path(text).name, maxsplit=1)[0].split(".", 1)[0].rstrip("_-")
         base = stem or Path(text).parent.name
     else:
         base = Path(text).name.split(".", 1)[0]
