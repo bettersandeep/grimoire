@@ -267,7 +267,9 @@ def check_detail(text, values, ignore=(), totals=()):
         ok = _matches(pool, claim["value"], claim["tol"], claim["percent"]) or (
             claim["written"] is not None and _near(pool, claim["written"], claim["written_tol"]))
         (sourced if ok else rest).append(claim)
-    shown = sorted({c["value"] for c in claims if c in sourced})
+    # "29.05M" traces as 29.05 when the result is in millions: arithmetic with it must use 29.05, not 29,050,000
+    shown = sorted({c["value"] if _matches(pool, c["value"], c["tol"], c["percent"]) else c["written"]
+                    for c in sourced})
     sums = sorted(_pairs(shown, ratios=False))
     # ponytail: pairs of pool values only while the pool is small (O(n^2)); cited results are usually small.
     strong = set(shown) | {abs(t) for t in totals}
@@ -289,8 +291,9 @@ def check_detail(text, values, ignore=(), totals=()):
         ok = _matches(sums if small else wide_pct if claim["percent"] else wide, claim["value"], claim["tol"], claim["percent"])
         if not ok and claim["written"] is not None:  # "$66,763.08M" when the shown numbers are millions
             ok = _near(wide, claim["written"], claim["written_tol"])
-        if not ok and not small and _matches(hidden, claim["value"], claim["tol"], claim["percent"]):
-            ok = True
+        if not ok and not small and (_matches(hidden, claim["value"], claim["tol"], claim["percent"]) or (
+                claim["written"] is not None and _near(hidden, claim["written"], claim["written_tol"]))):
+            ok = True  # "4.52M ahead of South": 29.05 - 24.53, where 24.53 is not in this reply
             loose.append(claim["raw"])
         (derived if ok else unsourced).append(claim["raw"])
     return Checked([c["raw"] for c in sourced], derived, unsourced, loose, unchecked)

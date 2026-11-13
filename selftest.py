@@ -66,6 +66,12 @@ def test_verify():
     assert "Not checked: 2026 (looks like a year) · 100 (a round factor)" in verify.footer(hidden), verify.footer(hidden)
     assert check3("2024 orders and 100 returns", [2024, 100]) == (["2024", "100"], [], [])
     assert verify.footer(verify.check_detail("Since 2019.", vals)) == ""  # no number to check: no footer
+    # numbers written in millions: a difference of two shown values traces; with one value not shown, it is loose
+    musd = [29.05, 24.53, 19.93, 19.43]
+    assert verify.check_detail("North 29.05M, South 24.53M: North is 4.52M ahead.", musd).derived == ["4.52M"]
+    one = verify.check_detail("North was highest at 29.05M, 4.52M ahead of South.", musd)
+    assert one.loose == ["4.52M"] and not one.unsourced, one
+    assert verify.check_detail("North was highest at 29.05M, 7.77M ahead of South.", musd).unsourced == ["7.77M"]
     # a written date is not a claim: the day of "November 11, 2026" once made a right answer "needs revision"
     for written in ("but today is November 11, 2026.", "on 11 November 2026", "since Nov. 3, 2026", "until Sept 30."):
         assert verify.extract(written) == [], (written, verify.extract(written))
