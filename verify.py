@@ -13,8 +13,9 @@ from typing import NamedTuple
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 _CITE = re.compile(r"\[\s*q\d+(?:\s*,\s*q\d+)*\s*\]|\bq\d+\b", re.I)
 _DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
-# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026", "May 2026". The day and year are not claims. Month first needs a year
-# or punctuation after the day, so "May 12 orders" is still read; month names are capitalised, so "may 12" is too.
+# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026", "May 2026". The day and year are not claims.
+# Month first needs a year or punctuation after the day, so "May 12 orders" is still read; month names are
+# capitalised, so "may 12" is too.
 _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?"
 _DAY = r"(?:[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?"
 _WRITTEN_DATE = re.compile(rf"\b{_MONTH}\s+{_DAY}(?:,?\s+(?:19|20)\d\d\b|(?=[.,;:)!?]|\s*$))"
@@ -187,11 +188,11 @@ def rises_on_negatives(text, signed):
     return list(dict.fromkeys(found))
 
 
-def caveats(loose=(), uncited=(), flipped=(), missing=(), wrong=()):
+def caveats(loose=(), uncited=(), flipped=(), missing=()):
     """Warning lines for numbers that trace, but not cleanly; they make the verdict "share with caveats".
-    missing: cited query ids that are not saved queries. wrong: wrong_rows results."""
+    missing: cited query ids that are not saved queries."""
     join = lambda items: " · ".join(dict.fromkeys(items))
-    out = [f"{raw} is {owner}'s value, not {label}'s" for raw, label, owner in wrong]
+    out = []
     if missing:
         out.append(f"the answer cites {join(missing)}, which {'is' if len(set(missing)) == 1 else 'are'} not a saved "
                    "query, so the numbers were checked against every result of this chat")
@@ -295,22 +296,30 @@ def check_detail(text, values, ignore=(), totals=()):
     return Checked([c["raw"] for c in sourced], derived, unsourced, loose, unchecked)
 
 
-def footer(checked, uncited=()):
+def footer(checked, uncited=(), wrong=()):
     """A short plain-text footer, or "" when the reply has no number to check.
-    Not counted as tracing: loose numbers (matched only by combining two hidden result values) and uncited
-    numbers (found only in a result of the chat that the reply does not cite)."""
+    Not counted as tracing: loose numbers (matched only by combining two hidden result values), uncited
+    numbers (found only in a result of the chat that the reply does not cite) and wrong-row numbers
+    (wrong_rows: in a result, but in another label's row)."""
     sourced, derived, unsourced, loose, unchecked = checked
     join = lambda items: " · ".join(dict.fromkeys(items))
+    sourced = list(sourced)
+    for raw, _label, _owner in wrong:
+        if raw in sourced:
+            sourced.remove(raw)
     derived = [d for d in derived if d not in loose]
     traced = len(sourced) + len(derived)
-    total = traced + len(unsourced) + len(loose) + len(uncited)
+    total = traced + len(unsourced) + len(loose) + len(uncited) + len(wrong)
     if not total:
         return ""
     how = f" ({len(derived)} by simple arithmetic: {join(derived)})" if derived else ""
     skipped = f" Not checked: {join(unchecked)}." if unchecked else ""
-    if not (unsourced or loose or uncited):
+    problems = [f"{why}: {join(which)}" for why, which in (
+        ("No source query for", unsourced) if unsourced else
+        ("Check how these were worked out", loose) if loose else ("Not from a cited query", uncited),
+        ("In the wrong row", [f"{raw} is {owner}'s value, not {label}'s" for raw, label, owner in wrong])) if which]
+    if not problems:
         what = "the number traces" if total == 1 else f"all {total} numbers trace"
         return f"\n\n---\nGrimoire check: {what} to query results{how}.{skipped}"
-    why, which = (("No source query for", unsourced) if unsourced else
-                  ("Check how these were worked out", loose) if loose else ("Not from a cited query", uncited))
-    return f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. {why}: {join(which)}.{skipped}"
+    return (f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
+            f"{'. '.join(problems)}.{skipped}")

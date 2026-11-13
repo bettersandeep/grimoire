@@ -107,6 +107,9 @@ def test_wrong_rows():
     assert w("North 250", [["North", 250], ["South", 250]]) == []  # its own row holds it too
     assert w("North peaks at 6 PM", [["North", 18], ["South", 6]]) == []  # a clock time is the hour 18
     assert w("North 250", [["North", 150]]) == []  # one label: nothing to mix up
+    both = verify.footer(verify.Checked(["250"], [], ["999"], [], []), wrong=[("250", "North", "South")])
+    assert both.endswith("0 of 2 numbers trace to query results. No source query for: 999. "
+                         "In the wrong row: 250 is South's value, not North's."), both
     musd = [["North", 29.05], ["South", 23.7]]  # SQL in millions, the reply in $M
     assert w("North $29.05M, South $23.7M", musd) == [] and w("South $29.05M", musd) == [("29.05M", "South", "North")]
 
@@ -1175,7 +1178,8 @@ def main():
     test_wrong_rows()
     # a number in the wrong row: the answer needs revision, and the footer says whose value it is
     note = tools.check_reply("North brought in 250 [q1].", "test")
-    assert "Verdict: needs revision" in note and "250 is South's value, not North's" in note, note
+    assert "0 of 1 numbers trace" in note and "In the wrong row: 250 is South's value, not North's." in note, note
+    assert "Verdict: needs revision" in note, note
     tools.remember_user_message("test", "show the top 2 regions")
     note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
     assert "2 of 3" in note and "999" in note and "No source" in note, note

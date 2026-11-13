@@ -239,15 +239,15 @@ def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db
         uncited = [n for n in checked.unsourced if n not in nowhere]
         checked = checked._replace(unsourced=[n for n in checked.unsourced if n in nowhere])
     unsourced, loose = checked.unsourced, checked.loose
-    out = verify.footer(checked, uncited)
-    last = store.get_query(db, last_qid) if out and last_qid and not cited_queries else None
+    last = store.get_query(db, last_qid) if last_qid and not cited_queries else None
     audited = cited_queries or ([last] if last else [])
+    wrong = verify.wrong_rows(text, [row for q in audited for row in q["rows"]])
+    out = verify.footer(checked, uncited, wrong)
     if out and (audited or missing):
         try:
             flipped = verify.rises_on_negatives(text, signed)
-            wrong = verify.wrong_rows(text, [row for q in audited for row in q["rows"]])
             judged, lines = audit.review(audited, eng, unsourced + [raw for raw, _label, _owner in wrong],
-                                         verify.caveats(loose, uncited, flipped, missing, wrong))
+                                         verify.caveats(loose, uncited, flipped, missing))
             out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
         except Exception:
             pass  # the audit is extra; never lose the number check because of it

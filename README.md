@@ -69,11 +69,11 @@ Other answers stay as the model wrote them.
 | `No source query for: 2,000` | The model wrote a number that no query produced, for example a rounded or made-up count |
 | `Check how these were worked out: …` | The number only matches by combining two values the reply does not show, so it may be a coincidence |
 | `Not from a cited query: 137` | The number is in another result of this chat, but not in a query the answer cites, so it may be a coincidence |
+| `In the wrong row: 250 is South's value, not North's` | The answer puts a number next to one label, but the result holds it only in another label's row |
 | `Not checked: 2024 (looks like a year)` | A year or a round factor such as 100 that no result holds; it may not be a claim, so it is named, not flagged |
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
 | `Watch out: 12.5% is written as a rise, but the result is negative` | The answer says "grew" or "up", and the query result is below zero |
-| `Watch out: 250 is South's value, not North's` | The answer puts a number next to one label, but the result holds it only in another label's row |
 | `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
 
 A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.
