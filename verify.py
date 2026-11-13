@@ -13,8 +13,9 @@ from typing import NamedTuple
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 _CITE = re.compile(r"\[\s*q\d+(?:\s*,\s*q\d+)*\s*\]|\bq\d+\b", re.I)
 _DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
-# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026", "May 2026". The day and year are not claims. Month first needs a year
-# or punctuation after the day, so "May 12 orders" is still read; month names are capitalised, so "may 12" is too.
+# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026", "May 2026". The day and year are not claims.
+# Month first needs a year or punctuation after the day, so "May 12 orders" is still read; month names are
+# capitalised, so "may 12" is too.
 _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?"
 _DAY = r"(?:[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?"
 _WRITTEN_DATE = re.compile(rf"\b{_MONTH}\s+{_DAY}(?:,?\s+(?:19|20)\d\d\b|(?=[.,;:)!?]|\s*$))"
@@ -52,7 +53,7 @@ def extract(text):
         if clock and re.fullmatch(r"\d{1,2}", core) and 1 <= int(core) <= 12:
             hour = int(core) % 12 + (12 if clock.group(1).lower().startswith("p") else 0)
             claims.append({"raw": core + clock.group(0), "value": float(hour), "tol": 0.5, "percent": False,
-                           "skip": None, "at": m.start(), "end": m.end() + clock.end()})
+                           "skip": None, "written": None, "at": m.start(), "end": m.end() + clock.end()})
             continue  # "6 PM" is the hour 18
         if not suffix and re.match(r"[A-Za-z_\d]", after[:1]):
             continue  # part of a word or id, like 4xx, 2nd, x86
@@ -110,6 +111,42 @@ def signed_values(obj, out=None):
 def numeric_values(obj):
     """Every number in a tool result as an absolute float: the check compares sizes ("fell 5%" is -5)."""
     return [abs(v) for v in signed_values(obj)]
+
+
+def wrong_rows(text, rows):
+    """[(raw, label, owner)]: numbers the reply puts next to one label (North) that the results hold only in
+    another label's row (South). rows: the result rows the answer rests on; a label is a text cell.
+    Precise on purpose: a stretch of text that names two labels, or none, is not read, and a number that is in
+    no row (a share, a sum) is left to the number check.
+    ponytail: a number worked out for North that equals South's value by chance is flagged too; rare."""
+    pools, names = {}, {}
+    for row in rows:
+        values = numeric_values(row)
+        for cell in row:
+            label = cell.strip() if isinstance(cell, str) else ""
+            if 2 <= len(label) <= 60 and any(ch.isalpha() for ch in label):
+                names.setdefault(label.lower(), label)
+                pools.setdefault(label.lower(), []).extend(values)
+    if len(pools) < 2:
+        return []
+    pools = {key: sorted(values) for key, values in pools.items()}
+    longest_first = sorted(pools, key=len, reverse=True)  # "North East" before "North"
+    label_at = re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, longest_first)) + r")(?!\w)", re.I)
+    text = text or ""
+    found, start = [], 0
+    for claim in extract(text):
+        line_start = text.rfind("\n", 0, claim["at"]) + 1
+        named = {m.lower() for m in label_at.findall(text, max(start, line_start), claim["at"])}
+        start = claim["end"]
+        if claim["skip"] or len(named) != 1:
+            continue
+        label = named.pop()
+        holds = lambda key: _matches(pools[key], claim["value"], claim["tol"], claim["percent"]) or (
+            claim["written"] is not None and _near(pools[key], claim["written"], claim["written_tol"]))
+        owner = None if holds(label) else next((key for key in pools if key != label and holds(key)), None)
+        if owner:
+            found.append((claim["raw"], names[label], names[owner]))
+    return found
 
 
 # A reply can state the right size with the wrong direction: "grew 12.5%" for a result of -12.5.
@@ -228,7 +265,7 @@ def check_detail(text, values, ignore=(), totals=()):
     sourced, rest = [], []
     for claim in claims:
         ok = _matches(pool, claim["value"], claim["tol"], claim["percent"]) or (
-            claim.get("written") is not None and _near(pool, claim["written"], claim["written_tol"]))
+            claim["written"] is not None and _near(pool, claim["written"], claim["written_tol"]))
         (sourced if ok else rest).append(claim)
     shown = sorted({c["value"] for c in claims if c in sourced})
     sums = sorted(_pairs(shown, ratios=False))
@@ -250,7 +287,7 @@ def check_detail(text, values, ignore=(), totals=()):
         # ratio, share or column total.
         small = claim["value"] < 100 and claim["value"] == int(claim["value"]) and not claim["percent"]
         ok = _matches(sums if small else wide_pct if claim["percent"] else wide, claim["value"], claim["tol"], claim["percent"])
-        if not ok and claim.get("written") is not None:  # "$66,763.08M" when the shown numbers are millions
+        if not ok and claim["written"] is not None:  # "$66,763.08M" when the shown numbers are millions
             ok = _near(wide, claim["written"], claim["written_tol"])
         if not ok and not small and _matches(hidden, claim["value"], claim["tol"], claim["percent"]):
             ok = True
@@ -259,22 +296,30 @@ def check_detail(text, values, ignore=(), totals=()):
     return Checked([c["raw"] for c in sourced], derived, unsourced, loose, unchecked)
 
 
-def footer(checked, uncited=()):
+def footer(checked, uncited=(), wrong=()):
     """A short plain-text footer, or "" when the reply has no number to check.
-    Not counted as tracing: loose numbers (matched only by combining two hidden result values) and uncited
-    numbers (found only in a result of the chat that the reply does not cite)."""
+    Not counted as tracing: loose numbers (matched only by combining two hidden result values), uncited
+    numbers (found only in a result of the chat that the reply does not cite) and wrong-row numbers
+    (wrong_rows: in a result, but in another label's row)."""
     sourced, derived, unsourced, loose, unchecked = checked
     join = lambda items: " · ".join(dict.fromkeys(items))
+    sourced = list(sourced)
+    for raw, _label, _owner in wrong:
+        if raw in sourced:
+            sourced.remove(raw)
     derived = [d for d in derived if d not in loose]
     traced = len(sourced) + len(derived)
-    total = traced + len(unsourced) + len(loose) + len(uncited)
+    total = traced + len(unsourced) + len(loose) + len(uncited) + len(wrong)
     if not total:
         return ""
     how = f" ({len(derived)} by simple arithmetic: {join(derived)})" if derived else ""
     skipped = f" Not checked: {join(unchecked)}." if unchecked else ""
-    if not (unsourced or loose or uncited):
+    problems = [f"{why}: {join(which)}" for why, which in (
+        ("No source query for", unsourced) if unsourced else
+        ("Check how these were worked out", loose) if loose else ("Not from a cited query", uncited),
+        ("In the wrong row", [f"{raw} is {owner}'s value, not {label}'s" for raw, label, owner in wrong])) if which]
+    if not problems:
         what = "the number traces" if total == 1 else f"all {total} numbers trace"
         return f"\n\n---\nGrimoire check: {what} to query results{how}.{skipped}"
-    why, which = (("No source query for", unsourced) if unsourced else
-                  ("Check how these were worked out", loose) if loose else ("Not from a cited query", uncited))
-    return f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. {why}: {join(which)}.{skipped}"
+    return (f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
+            f"{'. '.join(problems)}.{skipped}")

@@ -261,15 +261,16 @@ def _changing_base(q, eng, column, kind):
     return None
 
 
-def verdict(unsourced, warnings):
-    if unsourced:
+def verdict(failed, warnings):
+    """failed: numbers with no source, or in the wrong row."""
+    if failed:
         return "needs revision"
     return "share with caveats" if warnings else "ready to share"
 
 
-def review(queries, eng, unsourced, caveats=()):
+def review(queries, eng, failed, caveats=()):
     """Footer lines for the cited queries: (verdict, [lines]). Empty lines when there is nothing to say.
-    caveats: warnings from the number check (verify.caveats); they come first."""
+    failed: numbers that fail the check. caveats: warnings from the number check (verify.caveats); they come first."""
     assumed, warned = [], list(caveats)
     for q in queries[-MAX_QUERIES:]:
         assumed += [f"{a} [{q['id']}]" for a in assumptions(q, eng)]
@@ -279,4 +280,4 @@ def review(queries, eng, unsourced, caveats=()):
         lines.append("Assumes: " + "; ".join(dict.fromkeys(assumed)) + ".")
     if warned:
         lines.append("Watch out: " + "; ".join(dict.fromkeys(warned)) + ".")
-    return verdict(unsourced, warned), lines
+    return verdict(failed, warned), lines
