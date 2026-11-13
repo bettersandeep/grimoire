@@ -104,7 +104,7 @@ function Header({ summary, act }) {
   return jsxs('header', { className: 'gr-top', children: [
     jsxs('div', { className: 'gr-brand', children: [
       jsx('span', { className: 'gr-mark', children: jsx(Mark, {}) }),
-      jsxs('div', { children: [jsx('h1', { children: 'Data' }), jsx('p', { children: `Grimoire ${s.version || ''} · every number has a receipt` })] })
+      jsxs('div', { children: [jsx('h1', { children: 'Data' }), jsx('p', { children: `Grimoire ${s.version || ''} · numbers with receipts` })] })
     ] }),
     jsxs('div', { className: 'gr-toggles', children: [
       jsx(Toggle, { label: 'Learning mode', checked: s.learn, hint: 'After data answers: how the answer was made, and a better question',
@@ -138,8 +138,8 @@ function About({ show, act }) {
   if (!show) return null
   return jsxs('section', { className: 'gr-about', 'aria-label': 'What Grimoire does', children: [
     jsxs('div', { className: 'gr-about-text', children: [
-      jsx('b', { children: 'Ask questions about your data files, and check every number' }),
-      jsx('p', { children: 'Name a CSV, JSON, Parquet or SQLite file in any chat. Grimoire answers with a real SQL query and checks each number in the reply against it. It reads your files where they are and never changes them.' }),
+      jsx('b', { children: 'Ask questions about your data files, and check the numbers' }),
+      jsx('p', { children: 'Name a CSV, JSON, Parquet or SQLite file in any chat. Grimoire answers with a real SQL query and flags any number in the reply that no query produced. It reads your files where they are and never changes them.' }),
       jsxs('ul', { children: [
         jsxs('li', { children: [jsx('b', { children: 'Files' }), ' are the files you named in chats. Each gets a ', jsx('b', { children: 'Data health' }), ' score: how far you can trust its numbers. Click the score to see why.'] }),
         jsxs('li', { children: [jsx('b', { children: 'Saved queries' }), ' are the answers: chart, table, the SQL, and how each answer was made. Click ', jsx('b', { children: 'New chart' }), ' to make your own.'] }),

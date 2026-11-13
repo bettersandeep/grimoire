@@ -1,15 +1,15 @@
 # Grimoire
 
-![Grimoire, a Hermes Agent plugin by bettersandeep: every number in the answer has a receipt.](assets/banner.jpg)
+![Grimoire, a Hermes Agent plugin by bettersandeep: the numbers in the answer come with receipts.](assets/banner.jpg)
 
 Ask Hermes about your data files, and get answers that are fast, cheap and checked.
-Every number has a receipt.
+Each number comes with a receipt: the query that produced it.
 
 - **Fast on big files:** DuckDB answers with one SQL query, so the model never reads your rows.
   100 million rows in a 5 GB CSV: 12 s instead of 182 s, same question, same model (Claude Sonnet 5.5).
 - **Fewer tokens:** about 35,500 input tokens per answer on Claude Haiku, Sonnet and Opus 5.5, with 2 model calls.
   That is 17% to 56% fewer than plain Hermes in 15 of 18 benchmark tests.
-- **Checked:** after each reply, Grimoire checks every number against the query results and flags the ones with no source.
+- **Checked:** after each reply, Grimoire flags any number that no query produced, and names the numbers it cannot check.
 - **Study your data with 0 tokens:** a Data page in Hermes Desktop with ten chart views, pivots, drill-down and a health score for each file.
   Plugin code makes all of it, with no model call.
 - **Learn as you go, 0 tokens:** learning mode shows how each answer was made, step by step, in plain words or SQL.
@@ -63,17 +63,18 @@ Under the answer, Grimoire adds its check:
 
 | Line | Means |
 |---|---|
-| `Grimoire check: all 2 numbers trace to query results` | Every number in the reply comes from a query result, or from simple arithmetic on numbers the reply shows |
+| `Grimoire check: all 2 numbers trace to query results` | Each number the check reads comes from a query result, or from simple arithmetic on numbers the reply shows |
 | `No source query for: 2,000` | The model wrote a number that no query produced, for example a rounded or made-up count |
 | `Check how these were worked out: …` | The number only matches by combining two values the reply does not show, so it may be a coincidence |
 | `Not from a cited query: 137` | The number is in another result of this chat, but not in a query the answer cites, so it may be a coincidence |
+| `Not checked: 2024 (looks like a year)` | A year or a round factor such as 100 that no result holds; it may not be a claim, so it is named, not flagged |
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
 | `Watch out: 12.5% is written as a rise, but the result is negative` | The answer says "grew" or "up", and the query result is below zero |
 | `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
 
 A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.
-Query q42 said $29.05M, and Grimoire flagged every number in the reply.
+Query q42 said $29.05M, and Grimoire flagged each wrong number in the reply.
 In the benchmark, plain Hermes on Claude Opus 5.5 made the opposite mistake: it divided by 100 twice, so every region total was 100 times too small.
 
 To see the SQL and result behind any number, type `/grimoire sql q3`.
@@ -257,6 +258,7 @@ The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_que
 ## Known limits
 
 - The check reads digits only. Number words ("three") and text claims (names, rankings) are not checked.
+- Years and round factors (100, 1000) count only when a result holds them; the others are listed as not checked.
 - A small number can match a query value by chance; numbers that only match by combining hidden values are marked for a check.
 - Numbers from two arithmetic steps, or from a query the answer does not cite, are flagged even when right.
 - An answer that cites no query is checked against every result of the chat, which is a wider net.
