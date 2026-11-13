@@ -59,7 +59,9 @@ You do not need to set anything up, and all your other Hermes tools keep working
 ![A chat answer with Grimoire's check under it: all 7 numbers trace, one by simple arithmetic, and a warning that one region is spelled three ways.](assets/screenshots/chat-check.png)
 
 Each answer cites its query, like `[q3]`.
-Under the answer, Grimoire adds its check:
+Under each answer about your data, Grimoire adds its check.
+An answer is about your data when a Grimoire tool ran in that turn, or the answer cites a query or names a table, column or value from this chat's results.
+Other answers stay as the model wrote them.
 
 | Line | Means |
 |---|---|
