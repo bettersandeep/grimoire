@@ -73,6 +73,7 @@ Other answers stay as the model wrote them.
 | `Assumes: left out 1,996 of 50,000 rows (empty amount)` | What the query's filters dropped |
 | `Watch out: 'North' / 'north ' / 'N. Region' look like one value…` | A common mistake in the method or the data |
 | `Watch out: 12.5% is written as a rise, but the result is negative` | The answer says "grew" or "up", and the query result is below zero |
+| `Watch out: 250 is South's value, not North's` | The answer puts a number next to one label, but the result holds it only in another label's row |
 | `Verdict: ready to share`, `share with caveats`, `needs revision` | The summary of the check |
 
 A real example: on a free model, the model once forgot to divide cents by 100 and reported North at $2,905M.
@@ -259,7 +260,8 @@ The model gets these tools: `grimoire_attach`, `grimoire_profile`, `grimoire_que
 
 ## Known limits
 
-- The check reads digits only. Number words ("three") and text claims (names, rankings) are not checked.
+- The check reads digits only. Number words ("three") and text claims such as rankings are not checked.
+- A number is tied to a label only when the text just before it names one label from the results, such as `North: 250` or a table row.
 - Years and round factors (100, 1000) count only when a result holds them; the others are listed as not checked.
 - A small number can match a query value by chance; numbers that only match by combining hidden values are marked for a check.
 - Numbers from two arithmetic steps, or from a query the answer does not cite, are flagged even when right.

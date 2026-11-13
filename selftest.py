@@ -91,6 +91,26 @@ def test_verify():
     assert verify.footer(real).endswith("No source query for: 5. Not checked: 100 (a round factor)."), verify.footer(real)
 
 
+def test_wrong_rows():
+    # a number next to one label must come from that label's row
+    rows = [["North", 150, 0.375], ["South", 250, 0.625], ["N. Region", 3, 0.0]]
+    w = verify.wrong_rows
+    assert w("North had 250 and South 150.", rows) == [("250", "North", "South"), ("150", "South", "North")]
+    assert w("North had 150 and South 250.", rows) == []
+    assert w("North and South had 250 and 150.", rows) == []  # two labels, then none: not read
+    assert w("| South | 150 |\n| North | 250 |", rows) == [("150", "South", "North"), ("250", "North", "South")]
+    assert w("SOUTH: 150", rows) == [("150", "South", "North")]  # case is ignored
+    assert w("North's share is 37.5%", rows) == []
+    assert w("North's share is 62.5%", rows) == [("62.5%", "North", "South")]
+    assert w("North is 40% of the total", rows) == []  # in no row: the number check covers it
+    assert w("N. Region 3, North 150", rows) == []  # the longest label wins
+    assert w("North 250", [["North", 250], ["South", 250]]) == []  # its own row holds it too
+    assert w("North peaks at 6 PM", [["North", 18], ["South", 6]]) == []  # a clock time is the hour 18
+    assert w("North 250", [["North", 150]]) == []  # one label: nothing to mix up
+    musd = [["North", 29.05], ["South", 23.7]]  # SQL in millions, the reply in $M
+    assert w("North $29.05M, South $23.7M", musd) == [] and w("South $29.05M", musd) == [("29.05M", "South", "North")]
+
+
 def test_data_quality(tmp, db):
     import gzip
     # malformed lines: good rows load with real columns, bad lines are reported
@@ -1152,6 +1172,10 @@ def main():
 
     # reply check through the tools: only numbers this session's tools returned count
     test_verify()
+    test_wrong_rows()
+    # a number in the wrong row: the answer needs revision, and the footer says whose value it is
+    note = tools.check_reply("North brought in 250 [q1].", "test")
+    assert "Verdict: needs revision" in note and "250 is South's value, not North's" in note, note
     tools.remember_user_message("test", "show the top 2 regions")
     note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
     assert "2 of 3" in note and "999" in note and "No source" in note, note

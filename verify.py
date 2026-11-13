@@ -52,7 +52,7 @@ def extract(text):
         if clock and re.fullmatch(r"\d{1,2}", core) and 1 <= int(core) <= 12:
             hour = int(core) % 12 + (12 if clock.group(1).lower().startswith("p") else 0)
             claims.append({"raw": core + clock.group(0), "value": float(hour), "tol": 0.5, "percent": False,
-                           "skip": None, "at": m.start(), "end": m.end() + clock.end()})
+                           "skip": None, "written": None, "at": m.start(), "end": m.end() + clock.end()})
             continue  # "6 PM" is the hour 18
         if not suffix and re.match(r"[A-Za-z_\d]", after[:1]):
             continue  # part of a word or id, like 4xx, 2nd, x86
@@ -112,6 +112,42 @@ def numeric_values(obj):
     return [abs(v) for v in signed_values(obj)]
 
 
+def wrong_rows(text, rows):
+    """[(raw, label, owner)]: numbers the reply puts next to one label (North) that the results hold only in
+    another label's row (South). rows: the result rows the answer rests on; a label is a text cell.
+    Precise on purpose: a stretch of text that names two labels, or none, is not read, and a number that is in
+    no row (a share, a sum) is left to the number check.
+    ponytail: a number worked out for North that equals South's value by chance is flagged too; rare."""
+    pools, names = {}, {}
+    for row in rows:
+        values = numeric_values(row)
+        for cell in row:
+            label = cell.strip() if isinstance(cell, str) else ""
+            if 2 <= len(label) <= 60 and any(ch.isalpha() for ch in label):
+                names.setdefault(label.lower(), label)
+                pools.setdefault(label.lower(), []).extend(values)
+    if len(pools) < 2:
+        return []
+    pools = {key: sorted(values) for key, values in pools.items()}
+    longest_first = sorted(pools, key=len, reverse=True)  # "North East" before "North"
+    label_at = re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, longest_first)) + r")(?!\w)", re.I)
+    text = text or ""
+    found, start = [], 0
+    for claim in extract(text):
+        line_start = text.rfind("\n", 0, claim["at"]) + 1
+        named = {m.lower() for m in label_at.findall(text, max(start, line_start), claim["at"])}
+        start = claim["end"]
+        if claim["skip"] or len(named) != 1:
+            continue
+        label = named.pop()
+        holds = lambda key: _matches(pools[key], claim["value"], claim["tol"], claim["percent"]) or (
+            claim["written"] is not None and _near(pools[key], claim["written"], claim["written_tol"]))
+        owner = None if holds(label) else next((key for key in pools if key != label and holds(key)), None)
+        if owner:
+            found.append((claim["raw"], names[label], names[owner]))
+    return found
+
+
 # A reply can state the right size with the wrong direction: "grew 12.5%" for a result of -12.5.
 _RISE = r"(?:grew|grows?|grown|growing|growth|rose|rises?|risen|rising|increas(?:e|es|ed|ing)|gain(?:s|ed|ing)?|jump(?:s|ed|ing)?|climb(?:s|ed|ing)?|surg(?:e|es|ed|ing)|up)"
 # "grew 12.5%", "grew by about **12.5%**", "up ~$12.5M": only filler words, spaces, Markdown marks and signs between
@@ -151,11 +187,11 @@ def rises_on_negatives(text, signed):
     return list(dict.fromkeys(found))
 
 
-def caveats(loose=(), uncited=(), flipped=(), missing=()):
+def caveats(loose=(), uncited=(), flipped=(), missing=(), wrong=()):
     """Warning lines for numbers that trace, but not cleanly; they make the verdict "share with caveats".
-    missing: cited query ids that are not saved queries."""
+    missing: cited query ids that are not saved queries. wrong: wrong_rows results."""
     join = lambda items: " · ".join(dict.fromkeys(items))
-    out = []
+    out = [f"{raw} is {owner}'s value, not {label}'s" for raw, label, owner in wrong]
     if missing:
         out.append(f"the answer cites {join(missing)}, which {'is' if len(set(missing)) == 1 else 'are'} not a saved "
                    "query, so the numbers were checked against every result of this chat")
@@ -228,7 +264,7 @@ def check_detail(text, values, ignore=(), totals=()):
     sourced, rest = [], []
     for claim in claims:
         ok = _matches(pool, claim["value"], claim["tol"], claim["percent"]) or (
-            claim.get("written") is not None and _near(pool, claim["written"], claim["written_tol"]))
+            claim["written"] is not None and _near(pool, claim["written"], claim["written_tol"]))
         (sourced if ok else rest).append(claim)
     shown = sorted({c["value"] for c in claims if c in sourced})
     sums = sorted(_pairs(shown, ratios=False))
@@ -250,7 +286,7 @@ def check_detail(text, values, ignore=(), totals=()):
         # ratio, share or column total.
         small = claim["value"] < 100 and claim["value"] == int(claim["value"]) and not claim["percent"]
         ok = _matches(sums if small else wide_pct if claim["percent"] else wide, claim["value"], claim["tol"], claim["percent"])
-        if not ok and claim.get("written") is not None:  # "$66,763.08M" when the shown numbers are millions
+        if not ok and claim["written"] is not None:  # "$66,763.08M" when the shown numbers are millions
             ok = _near(wide, claim["written"], claim["written_tol"])
         if not ok and not small and _matches(hidden, claim["value"], claim["tol"], claim["percent"]):
             ok = True
