@@ -1,6 +1,6 @@
 [project]
 name = "grimoire"
-version = "0.26.0"
+version = "0.27.0"
 description = "A Hermes Agent plugin for learning and exploring data with fewer tokens."
 requires-python = ">=3.11"
 license = "MIT"
@@ -9,3 +9,6 @@ dependencies = [
     # 2.0.0 ships cp311 wheels only, so stay below 2 until that changes.
     "duckdb>=1.4.2,<3",
 ]
+
+[tool.pytest.ini_options]
+python_files = ["selftest.py"]  # one file; its tests share state and run in file order (see conftest.py)

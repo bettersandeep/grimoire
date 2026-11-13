@@ -1,6 +1,7 @@
-"""Self-test for the engine, the store and the tools. Run: python -I selftest.py (needs duckdb)."""
+"""Self-test for the engine, the store and the tools. Run: python -I selftest.py, or pytest (needs duckdb)."""
 
 import importlib
+import inspect
 import json
 import os
 import re
@@ -65,6 +66,12 @@ def test_verify():
     assert "Not checked: 2026 (looks like a year) · 100 (a round factor)" in verify.footer(hidden), verify.footer(hidden)
     assert check3("2024 orders and 100 returns", [2024, 100]) == (["2024", "100"], [], [])
     assert verify.footer(verify.check_detail("Since 2019.", vals)) == ""  # no number to check: no footer
+    # numbers written in millions: a difference of two shown values traces; with one value not shown, it is loose
+    musd = [29.05, 24.53, 19.93, 19.43]
+    assert verify.check_detail("North 29.05M, South 24.53M: North is 4.52M ahead.", musd).derived == ["4.52M"]
+    one = verify.check_detail("North was highest at 29.05M, 4.52M ahead of South.", musd)
+    assert one.loose == ["4.52M"] and not one.unsourced, one
+    assert verify.check_detail("North was highest at 29.05M, 7.77M ahead of South.", musd).unsourced == ["7.77M"]
     # a written date is not a claim: the day of "November 11, 2026" once made a right answer "needs revision"
     for written in ("but today is November 11, 2026.", "on 11 November 2026", "since Nov. 3, 2026", "until Sept 30."):
         assert verify.extract(written) == [], (written, verify.extract(written))
@@ -112,6 +119,122 @@ def test_wrong_rows():
                          "In the wrong row: 250 is South's value, not North's."), both
     musd = [["North", 29.05], ["South", 23.7]]  # SQL in millions, the reply in $M
     assert w("North $29.05M, South $23.7M", musd) == [] and w("South $29.05M", musd) == [("29.05M", "South", "North")]
+
+
+def make_env():
+    """(folder, database) that all tests share, in file order: a small CSV, a file the tests must not read,
+    and a SQLite file. pytest gets them through conftest.py."""
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "sales.csv").write_text("region,amount,day\nNorth,100,2026-01-01\nSouth,250,2026-01-02\nNorth,50,2026-01-03\n")
+    (tmp / "secret.csv").write_text("x\n1\n")
+    con = sqlite3.connect(tmp / "shop.db")
+    con.execute("CREATE TABLE orders (id INTEGER, total REAL, note TEXT)")
+    con.executemany("INSERT INTO orders VALUES (?, ?, ?)", [(1, 9.5, "a"), (2, 20.0, None)])
+    con.commit()
+    con.close()
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    tools.setup(db=db, eng=None)
+    return tmp, db
+
+
+def test_core(tmp, db):
+    csv, secret, lite = tmp / "sales.csv", tmp / "secret.csv", tmp / "shop.db"
+    # attach and profile
+    r = call(tools.attach, path=str(csv))
+    assert r["dataset"] == "sales" and r["tables"][0]["rows"] == 3, r
+    r = call(tools.profile, dataset="sales")
+    assert {row[0] for row in r["profile"]} == {"region", "amount", "day"}, r
+
+    # query returns an id and correct numbers
+    r = call(tools.query, sql="SELECT region, sum(amount) AS total FROM sales GROUP BY region ORDER BY region")
+    assert r["id"] == "q1" and r["rows"] == [["North", 150], ["South", 250]], r
+    assert store.get_query(db, "q1")["rows"] == [["North", 150], ["South", 250]]
+
+    # SQLite through the stdlib reader
+    r = call(tools.attach, path=str(lite))
+    assert r["dataset"] == "shop" and r["tables"][0]["table"] == "shop.orders", r
+    r = call(tools.query, sql="SELECT sum(total) FROM shop.orders")
+    assert r["rows"] == [[29.5]], r
+    r = call(tools.profile, dataset="shop", table="orders")
+    assert "error" not in r, r
+
+    # safety: no writes, no other files, no settings changes, no extensions, one statement
+    for bad in [
+        "DROP VIEW sales",
+        f"COPY sales TO '{tmp / 'out.csv'}'",
+        f"SELECT * FROM read_csv('{secret}')",
+        "SET enable_external_access = true",
+        "INSTALL httpfs",
+        "SELECT 1; SELECT 2",
+    ]:
+        r = call(tools.query, sql=bad)
+        assert "error" in r, (bad, r)
+    assert not (tmp / "out.csv").exists()
+
+    # row cap
+    r = call(tools.query, sql="SELECT * FROM range(500)")
+    assert len(r["rows"]) == engine.MAX_ROWS and "truncated" in r, len(r["rows"])
+
+    # notes and catalog survive a new engine (a new session)
+    r = call(tools.note, dataset="sales", column="amount", note="in cents")
+    assert r.get("saved"), r
+    tools.setup(db=db, eng=None)
+    r = call(tools.catalog)
+    sales = next(d for d in r["datasets"] if d["dataset"] == "sales")
+    assert sales["notes"] == ["sales.amount: in cents"], sales
+    r = call(tools.query, sql="SELECT count(*) FROM sales")
+    assert r["rows"] == [[3]], r
+
+    # errors are JSON, never exceptions
+    assert "error" in call(tools.attach, path=str(tmp / "missing.csv"))
+    assert "error" in call(tools.profile, dataset="nope")
+
+    # tool descriptions: the Tool Search listing shows only the first sentence, up to 80 characters
+    for schema in schemas.ALL:
+        first = schema["description"].split(". ")[0] + "."
+        assert len(first) <= 80, (schema["name"], len(first), first)
+
+    # read guard: blocks big data files only
+    big = tmp / "big.csv"
+    big.write_text("a,b\n" + "1,2\n" * 100000)
+    assert guard.check("read_file", {"path": str(big)})["action"] == "block"
+    assert guard.check("read_file", {"path": "big.csv"}, cwd=str(tmp))["action"] == "block"
+    assert guard.check("read_file", {"path": str(csv)}) is None          # small file
+    assert guard.check("read_file", {"path": str(big)}, limit_kb=0) is None  # turned off
+    assert guard.check("terminal", {"command": f"head {big}"}) is None   # other tools
+    notes = tmp / "notes.md"
+    notes.write_text("x" * 400000)
+    assert guard.check("read_file", {"path": str(notes)}) is None        # not a data file
+    assert guard.check("read_file", {"path": str(tmp / "nope.csv")}) is None
+
+    # discovery hint: only when a data file is mentioned
+    hint = guard.data_file_hint("What is revenue per region in /tmp/data/sales.csv? Highest first.")
+    assert hint and "/tmp/data/sales.csv" in hint and "grimoire_attach" in hint, hint
+    assert "orders.parquet" in guard.data_file_hint("compare orders.parquet with 'shop.db'")
+    for msg in ["hello", "explain the csv format", "see example.com/page", "", None, "v1.db2 release"]:
+        assert guard.data_file_hint(msg) is None, msg
+
+    # reply check through the tools: only numbers this session's tools returned count
+    # a number in the wrong row: the answer needs revision, and the footer says whose value it is
+    note = tools.check_reply("North brought in 250 [q1].", "test")
+    assert "0 of 1 numbers trace" in note and "In the wrong row: 250 is South's value, not North's." in note, note
+    assert "Verdict: needs revision" in note, note
+    tools.remember_user_message("test", "show the top 2 regions")
+    note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
+    assert "2 of 3" in note and "999" in note and "No source" in note, note
+    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith(
+        "the number traces to query results. Verdict: ready to share.")
+    assert tools.check_reply("no numbers here", "test") == ""
+    assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
+    # only replies about the data are checked: a later turn that does not touch it gets no footer
+    tools.remember_user_message("test", "what is 2 + 2?")
+    assert tools.check_reply("2 + 2 is 4.", "test") == ""
+    tools.remember_user_message("test", "and the totals again?")
+    assert "999" in tools.check_reply("North has 150, South 999.", "test")  # names a value of a result
+    tools.remember_user_message("test", "per column?")
+    assert "7,777,777" in tools.check_reply("The amount column sums to 7,777,777.", "test")  # names a column
+    tools.remember_user_message("test", "thanks")
+    assert "Verdict" in tools.check_reply("It was 150 [q1].", "test")  # cites a query
 
 
 def test_data_quality(tmp, db):
@@ -1083,141 +1206,13 @@ def call(handler, **args):
 
 
 def main():
-    tmp = Path(tempfile.mkdtemp())
-    csv = tmp / "sales.csv"
-    csv.write_text("region,amount,day\nNorth,100,2026-01-01\nSouth,250,2026-01-02\nNorth,50,2026-01-03\n")
-    secret = tmp / "secret.csv"
-    secret.write_text("x\n1\n")
-    lite = tmp / "shop.db"
-    con = sqlite3.connect(lite)
-    con.execute("CREATE TABLE orders (id INTEGER, total REAL, note TEXT)")
-    con.executemany("INSERT INTO orders VALUES (?, ?, ?)", [(1, 9.5, "a"), (2, 20.0, None)])
-    con.commit()
-    con.close()
-
-    db = sqlite3.connect(":memory:", check_same_thread=False)
-    tools.setup(db=db, eng=None)
-
-    # attach and profile
-    r = call(tools.attach, path=str(csv))
-    assert r["dataset"] == "sales" and r["tables"][0]["rows"] == 3, r
-    r = call(tools.profile, dataset="sales")
-    assert {row[0] for row in r["profile"]} == {"region", "amount", "day"}, r
-
-    # query returns an id and correct numbers
-    r = call(tools.query, sql="SELECT region, sum(amount) AS total FROM sales GROUP BY region ORDER BY region")
-    assert r["id"] == "q1" and r["rows"] == [["North", 150], ["South", 250]], r
-    assert store.get_query(db, "q1")["rows"] == [["North", 150], ["South", 250]]
-
-    # SQLite through the stdlib reader
-    r = call(tools.attach, path=str(lite))
-    assert r["dataset"] == "shop" and r["tables"][0]["table"] == "shop.orders", r
-    r = call(tools.query, sql="SELECT sum(total) FROM shop.orders")
-    assert r["rows"] == [[29.5]], r
-    r = call(tools.profile, dataset="shop", table="orders")
-    assert "error" not in r, r
-
-    # safety: no writes, no other files, no settings changes, no extensions, one statement
-    for bad in [
-        "DROP VIEW sales",
-        f"COPY sales TO '{tmp / 'out.csv'}'",
-        f"SELECT * FROM read_csv('{secret}')",
-        "SET enable_external_access = true",
-        "INSTALL httpfs",
-        "SELECT 1; SELECT 2",
-    ]:
-        r = call(tools.query, sql=bad)
-        assert "error" in r, (bad, r)
-    assert not (tmp / "out.csv").exists()
-
-    # row cap
-    r = call(tools.query, sql="SELECT * FROM range(500)")
-    assert len(r["rows"]) == engine.MAX_ROWS and "truncated" in r, len(r["rows"])
-
-    # notes and catalog survive a new engine (a new session)
-    r = call(tools.note, dataset="sales", column="amount", note="in cents")
-    assert r.get("saved"), r
-    tools.setup(db=db, eng=None)
-    r = call(tools.catalog)
-    sales = next(d for d in r["datasets"] if d["dataset"] == "sales")
-    assert sales["notes"] == ["sales.amount: in cents"], sales
-    r = call(tools.query, sql="SELECT count(*) FROM sales")
-    assert r["rows"] == [[3]], r
-
-    # errors are JSON, never exceptions
-    assert "error" in call(tools.attach, path=str(tmp / "missing.csv"))
-    assert "error" in call(tools.profile, dataset="nope")
-
-    # tool descriptions: the Tool Search listing shows only the first sentence, up to 80 characters
-    for schema in schemas.ALL:
-        first = schema["description"].split(". ")[0] + "."
-        assert len(first) <= 80, (schema["name"], len(first), first)
-
-    # read guard: blocks big data files only
-    big = tmp / "big.csv"
-    big.write_text("a,b\n" + "1,2\n" * 100000)
-    assert guard.check("read_file", {"path": str(big)})["action"] == "block"
-    assert guard.check("read_file", {"path": "big.csv"}, cwd=str(tmp))["action"] == "block"
-    assert guard.check("read_file", {"path": str(csv)}) is None          # small file
-    assert guard.check("read_file", {"path": str(big)}, limit_kb=0) is None  # turned off
-    assert guard.check("terminal", {"command": f"head {big}"}) is None   # other tools
-    notes = tmp / "notes.md"
-    notes.write_text("x" * 400000)
-    assert guard.check("read_file", {"path": str(notes)}) is None        # not a data file
-    assert guard.check("read_file", {"path": str(tmp / "nope.csv")}) is None
-
-    # discovery hint: only when a data file is mentioned
-    hint = guard.data_file_hint("What is revenue per region in /tmp/data/sales.csv? Highest first.")
-    assert hint and "/tmp/data/sales.csv" in hint and "grimoire_attach" in hint, hint
-    assert "orders.parquet" in guard.data_file_hint("compare orders.parquet with 'shop.db'")
-    for msg in ["hello", "explain the csv format", "see example.com/page", "", None, "v1.db2 release"]:
-        assert guard.data_file_hint(msg) is None, msg
-
-    # reply check through the tools: only numbers this session's tools returned count
-    test_verify()
-    test_wrong_rows()
-    # a number in the wrong row: the answer needs revision, and the footer says whose value it is
-    note = tools.check_reply("North brought in 250 [q1].", "test")
-    assert "0 of 1 numbers trace" in note and "In the wrong row: 250 is South's value, not North's." in note, note
-    assert "Verdict: needs revision" in note, note
-    tools.remember_user_message("test", "show the top 2 regions")
-    note = tools.check_reply("North has 150 and South has 250; top 2 shown. Total 999.", "test")
-    assert "2 of 3" in note and "999" in note and "No source" in note, note
-    assert tools.check_reply("Sales total is 150 [q1].", "other-session").endswith(
-        "the number traces to query results. Verdict: ready to share.")
-    assert tools.check_reply("no numbers here", "test") == ""
-    assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
-    # only replies about the data are checked: a later turn that does not touch it gets no footer
-    tools.remember_user_message("test", "what is 2 + 2?")
-    assert tools.check_reply("2 + 2 is 4.", "test") == ""
-    tools.remember_user_message("test", "and the totals again?")
-    assert "999" in tools.check_reply("North has 150, South 999.", "test")  # names a value of a result
-    tools.remember_user_message("test", "per column?")
-    assert "7,777,777" in tools.check_reply("The amount column sums to 7,777,777.", "test")  # names a column
-    tools.remember_user_message("test", "thanks")
-    assert "Verdict" in tools.check_reply("It was 150 [q1].", "test")  # cites a query
-
-    test_data_quality(tmp, db)
-    test_security(tmp, db)
-    test_learning(tmp, db)
-    test_auto_attach(tmp, db)
-    test_data_plugin(tmp, db)
-    test_audit(tmp, db)
-    test_analysis_checks(tmp, db)
-    test_metrics(tmp, db)
-    test_drivers(tmp, db)
-    test_relations(tmp, db)
-    test_profile_checks(tmp, db)
-    test_lean_setup(tmp, db)
-    test_builder(tmp, db)
-    test_review_fixes(tmp, db)
-    test_recipes(tmp, db)
-    test_glob_and_names(tmp, db)
-    test_charts()
-    test_compare(tmp, db)
-    test_one_check_per_file_version(tmp, db)
-    test_restart(tmp)
-    print("selftest passed")
+    """Run every test in file order, as pytest does."""
+    tmp, db = make_env()
+    shared = {"tmp": tmp, "db": db}
+    tests = [test for name, test in globals().items() if name.startswith("test_")]
+    for test in tests:
+        test(**{name: shared[name] for name in inspect.signature(test).parameters})
+    print(f"selftest passed: {len(tests)} tests")
 
 
 if __name__ == "__main__":

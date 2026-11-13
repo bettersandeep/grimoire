@@ -1,8 +1,9 @@
 name: grimoire
-version: "0.26.0"
+version: "0.27.0"
 description: "Learn and explore your data with fewer tokens: ask questions about CSV, JSON, Parquet and SQLite files, and Grimoire flags any number in the answer that no query produced."
 author: Sandeep Singh
 requires_hermes: ">=0.23.0"
+# Python dependencies (duckdb) are in pyproject.toml, which Hermes reads first.
 provides_tools:
   - grimoire_attach
   - grimoire_profile
