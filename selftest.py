@@ -708,11 +708,7 @@ def test_lean_setup(tmp, db):
     # no numbers from Hermes (or bad ones): no tip, no status line
     tools.remember_call("lean", tokens="11000")
     tools.remember_call("lean", tool_count=True)
-    store.set_setting(db, "learn_tip", "")  # as on a fresh install
-    out = tools.check_reply(reply, "lean")
-    assert "Tip: this chat" not in out
-    assert "Tip: to see how each answer was made" in out and "/grimoire learn on" in out, out  # once
-    assert "Tip:" not in tools.check_reply(reply, "lean")
+    assert "Tip:" not in tools.check_reply(reply, "lean")  # the reply is the model's: no ads in it
     assert "This chat:" not in commands.run("", session_id="lean")
     tools.remember_call("lean", tool_count=9)  # tools known, tokens not yet: still nothing
     assert "This chat:" not in commands.run("", session_id="lean")
@@ -1163,6 +1159,15 @@ def main():
         "the number traces to query results. Verdict: ready to share.")
     assert tools.check_reply("no numbers here", "test") == ""
     assert tools.check_reply("Revenue 123", "never-used-grimoire") == ""
+    # only replies about the data are checked: a later turn that does not touch it gets no footer
+    tools.remember_user_message("test", "what is 2 + 2?")
+    assert tools.check_reply("2 + 2 is 4.", "test") == ""
+    tools.remember_user_message("test", "and the totals again?")
+    assert "999" in tools.check_reply("North has 150, South 999.", "test")  # names a value of a result
+    tools.remember_user_message("test", "per column?")
+    assert "7,777,777" in tools.check_reply("The amount column sums to 7,777,777.", "test")  # names a column
+    tools.remember_user_message("test", "thanks")
+    assert "Verdict" in tools.check_reply("It was 150 [q1].", "test")  # cites a query
 
     test_data_quality(tmp, db)
     test_security(tmp, db)

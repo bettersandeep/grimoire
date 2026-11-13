@@ -31,8 +31,8 @@ _lock = threading.Lock()
 _state = {"db": None, "engine": None}
 
 # What each chat needs for the reply check. In memory only.
-# ponytail: the last 50 chats and 50k values each; lost on restart (cited query ids still work).
-_MAX_SESSIONS, _MAX_VALUES, _MAX_USER_NUMBERS = 50, 50000, 1000
+# ponytail: the last 50 chats, 50k values and 5k names each; lost on restart (cited query ids still work).
+_MAX_SESSIONS, _MAX_VALUES, _MAX_USER_NUMBERS, _MAX_NAMES = 50, 50000, 1000, 5000
 
 
 class _Session:
@@ -40,6 +40,8 @@ class _Session:
 
     def __init__(self):
         self.used = False       # a Grimoire tool ran in this chat
+        self.turn_used = False  # a Grimoire tool ran since the user's last message
+        self.names = set()      # lower-case table, column and text values its tools returned
         self.values = []        # every number its tools returned, with its sign
         self.file_values = []   # of those, the ones from attach and profile: facts with no query id to cite
         self.user_numbers = []  # numbers the user typed; a reply may repeat them
@@ -73,12 +75,27 @@ def _session(session_id):
     return session
 
 
-def remember(session_id, result, query=False):
-    """query: the numbers are a saved query's result, which an answer cites by id; else attach or profile facts."""
+def _texts(obj):
+    """Short texts in a result, lower case: the labels a reply about it names, like 'north'."""
+    if isinstance(obj, str):
+        text = obj.strip().lower()
+        if 3 <= len(text) <= 40 and any(ch.isalpha() for ch in text):
+            yield text
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            yield from _texts(value)
+
+
+def remember(session_id, result, query=False, names=()):
+    """query: the numbers are a saved query's result, which an answer cites by id; else attach or profile facts.
+    names: the tables and columns the tool read."""
     numbers = verify.signed_values(result)
+    words = set(_texts(result)) | set(_texts(list(names)))
     with _lock:
         session = _session(session_id)
-        session.used = True
+        session.used = session.turn_used = True
+        if len(session.names) < _MAX_NAMES:
+            session.names |= words
         for values in (session.values,) if query else (session.values, session.file_values):
             values.extend(numbers)
             del values[:-_MAX_VALUES]
@@ -89,6 +106,7 @@ def remember_user_message(session_id, text):
     raws = [c["raw"].split()[0].rstrip("%") for c in verify.extract(text)]
     with _lock:
         session = _session(session_id)
+        session.turn_used = False  # a new turn: pre_llm_call runs once per user message
         session.user_numbers.extend(raws)
         del session.user_numbers[:-_MAX_USER_NUMBERS]
         if text:
@@ -156,13 +174,21 @@ def used_grimoire(session_id):
     return bool(session and session.used)
 
 
+def _names_any(text, names):
+    """True when text names one of names as a whole word, case ignored."""
+    lower = (text or "").lower()
+    # ponytail: one search per name, up to 5k names per reply (milliseconds); an index if names grow
+    return any(n in lower and re.search(rf"(?<!\w){re.escape(n)}(?!\w)", lower) for n in names)
+
+
 # only bracketed ids like [q12] or [q3, q4]: "Apple's Q3" is not a citation
 _CITED = re.compile(r"\[\s*(q\d+(?:\s*,\s*q\d+)*)\s*\]")
 
 
 def check_reply(text, session_id=None):
     """Text to add after a final reply: the number check, and in learning mode a card and the
-    prediction result. "" when Grimoire was not used in this session."""
+    prediction result. "" when the reply is not about the data: no Grimoire tool ran this turn, and the
+    reply cites no query and names no table, column or text value that the chat's tools returned."""
     with _lock:
         mine = _sessions.get(session_id or "")
         source = mine if session_id and mine and mine.used else (_sessions.get(_last["session"]) if not session_id else None)
@@ -170,9 +196,10 @@ def check_reply(text, session_id=None):
         file_values = list(source.file_values) if source else []
         last_qid = source.last_qid if source else None
         ignore = list(mine.user_numbers) if mine else []
+        about_data = bool(source) and (source.turn_used or _names_any(text, source.names))
     cited = list(dict.fromkeys(n for group in _CITED.findall(text or "") for n in re.findall(r"q(\d+)", group)))
-    if not values and not cited:
-        return ""  # Grimoire was not used here: do not open the database
+    if not cited and not (values and about_data):
+        return ""  # not about the data: do not open the database
     db, eng = _get()
     found = {n: store.get_query(db, n) for n in cited}
     cited_queries = [q for q in found.values() if q]
@@ -186,8 +213,6 @@ def check_reply(text, session_id=None):
     qid = f"q{cited[-1]}" if cited else last_qid
     if learn and qid:
         out += _learning_card(db, eng, qid)
-    if not learn:
-        out += _learn_tip(db)
     return out
 
 
@@ -272,18 +297,6 @@ def _learning_card(db, eng, qid):
     return card or ""
 
 
-def _learn_tip(db):
-    """Say once that learning mode exists."""
-    try:
-        if store.get_setting(db, "learn_tip", "") == "shown":
-            return ""
-        store.set_setting(db, "learn_tip", "shown")
-        return ("\nTip: to see how each answer was made, step by step, type /grimoire learn on "
-                "or switch on Learning mode on the Data page.")
-    except Exception:
-        return ""  # the tip is extra; never lose the check because of it
-
-
 def open_db():
     from plugins.plugin_storage import plugin_db  # Hermes runtime only; the self-test injects its own db
     return plugin_db("grimoire")
@@ -349,7 +362,7 @@ def _receipt(db, session_id, sql, purpose, columns, rows, truncated, datasets):
     with _lock:
         question = _session(session_id).message
     qid = store.save_query(db, session_id, sql, purpose, columns, rows, truncated, datasets=datasets, question=question)
-    remember(session_id, rows, query=True)
+    remember(session_id, rows, query=True, names=columns)
     with _lock:
         _session(session_id).last_qid = qid
     return qid
@@ -412,14 +425,15 @@ def attach(args, session_id=None, **kwargs):
     known = known if known and known[0] == version else None
     if not known:
         store.set_json(db, f"scan:{name}", eng.scan(name))  # so a restart does not read the whole file again
-    tables = []
+    tables, names = [], [name]
     for ref in eng.tables(name):
         sql_ref = engine.sql_ref(ref)
         cols = eng.schema(sql_ref)
+        names += [ref] + [c for c, _t in cols]
         store.save_columns(db, name, ref, [(c, t, None) for c, t in cols])
         rows = known[1][ref] if known else eng.row_count(sql_ref)
         tables.append({"table": ref, "rows": rows, "columns": [f"{c} {t}" for c, t in cols]})
-    remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables])
+    remember(session_id, [t["rows"] for t in tables] + [len(t["columns"]) for t in tables], names=names)
     store.set_json(db, f"rows:{name}", sum(t["rows"] for t in tables))
     result = {"dataset": name, "kind": kind, "tables": tables, "note": UNTRUSTED}
     variants = known[2] if known else []
@@ -506,10 +520,10 @@ def profile(args, session_id=None, **kwargs):
         if column not in types:
             return _err(f"No column '{column}' in {ref}. Columns: {', '.join(types)}")
         stats = eng.column_stats(engine.sql_ref(ref), column, types[column])
-        remember(session_id, stats)
+        remember(session_id, stats, names=[ref, column])
         return _ok(table=ref, **{k: _round(engine.to_json_value(v)) for k, v in stats.items()}, note=UNTRUSTED)
     rows, source, compact, issues, score, sampled = _quality(db, eng, dataset, ref)
-    remember(session_id, [row[2:] for row in compact])
+    remember(session_id, [row[2:] for row in compact], names=[ref] + [row[0] for row in compact])
     remember(session_id, issues)
     result = {"table": ref, "columns": ["column", "type", "null_pct", "distinct", "min", "max"], "profile": compact}
     role = relations.roles(rows)
