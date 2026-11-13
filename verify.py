@@ -8,15 +8,17 @@ Pure functions only; no Hermes or DuckDB imports.
 import bisect
 import math
 import re
+from typing import NamedTuple
 
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 _CITE = re.compile(r"\[\s*q\d+(?:\s*,\s*q\d+)*\s*\]|\bq\d+\b", re.I)
 _DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
-# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026". The day is not a claim. Month first needs a year
+# Written dates: "November 11, 2026", "Nov. 3", "11 November 2026", "May 2026". The day and year are not claims. Month first needs a year
 # or punctuation after the day, so "May 12 orders" is still read; month names are capitalised, so "may 12" is too.
 _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?"
 _DAY = r"(?:[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?"
-_WRITTEN_DATE = re.compile(rf"\b{_MONTH}\s+{_DAY}(?:,?\s+(?:19|20)\d\d\b|(?=[.,;:)!?]|\s*$))|\b{_DAY}\s+{_MONTH}(?![a-z])")
+_WRITTEN_DATE = re.compile(rf"\b{_MONTH}\s+{_DAY}(?:,?\s+(?:19|20)\d\d\b|(?=[.,;:)!?]|\s*$))"
+                           rf"|\b{_DAY}\s+{_MONTH}(?![a-z])(?:,?\s+(?:19|20)\d\d\b)?|\b{_MONTH}\s+(?:19|20)\d\d\b")
 _LIST_MARK = re.compile(r"(?m)^(\s*)\d+[.)](?=\s)")
 _NUM = re.compile(r"(?<![\w.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
 _SUFFIX = re.compile(
@@ -34,7 +36,8 @@ def _blank(match):
 
 
 def extract(text):
-    """Return the numeric claims in text as dicts: raw, value, tol, percent."""
+    """Return the numeric claims in text as dicts: raw, value, tol, percent, and skip: why the number may not be
+    a claim ("looks like a year", "a round factor"), or None."""
     text = _CODE.sub(_blank, text or "")
     for pattern in (_CITE, _DATE, _WRITTEN_DATE):
         text = pattern.sub(_blank, text)
@@ -49,7 +52,7 @@ def extract(text):
         if clock and re.fullmatch(r"\d{1,2}", core) and 1 <= int(core) <= 12:
             hour = int(core) % 12 + (12 if clock.group(1).lower().startswith("p") else 0)
             claims.append({"raw": core + clock.group(0), "value": float(hour), "tol": 0.5, "percent": False,
-                           "at": m.start(), "end": m.end() + clock.end()})
+                           "skip": None, "at": m.start(), "end": m.end() + clock.end()})
             continue  # "6 PM" is the hour 18
         if not suffix and re.match(r"[A-Za-z_\d]", after[:1]):
             continue  # part of a word or id, like 4xx, 2nd, x86
@@ -63,19 +66,16 @@ def extract(text):
             continue  # 309 or more digits: not a claim, and it would overflow later checks
         decimals = len(core.split(".", 1)[1]) if "." in core else 0
         plain_int = decimals == 0 and "," not in core and not unit
-        if plain_int and 1900 <= number <= 2100:
-            continue  # a year
         whole = number == int(number) and "," not in core and not unit
-        if whole and number >= 10 and str(int(number)).strip("0") == "1":
-            # ponytail: powers of ten (100, 1000) are usually unit factors ("÷ 100"); a real
-            # count of exactly 100 is skipped too. Tighten with context if that ever matters.
-            continue
+        skip = ("looks like a year" if plain_int and 1900 <= number <= 2100 else
+                "a round factor" if whole and number >= 10 and str(int(number)).strip("0") == "1" else None)
         mult = _MULT.get(unit, 1.0)
         claims.append({
             "raw": (core + (suffix.group(0) if suffix else "")).strip(),
             "value": number * mult,
             "tol": 0.5 * 10 ** -decimals * mult,
             "percent": unit in ("%", "percent"),
+            "skip": skip,
             # "$29.05M" also matches 29.05 as written: SQL often computes in millions (revenue_musd)
             # not for small whole numbers: "$15M" must not match a count of 15
             "written": number if mult != 1.0 and not (number < 100 and number == int(number)) else None,
@@ -134,6 +134,8 @@ def rises_on_negatives(text, signed):
     text = text or ""
     found = []
     for claim in extract(text):
+        if claim["skip"]:
+            continue  # a year or a round factor is not a size that can rise
         before = text[max(0, claim["at"] - 60):claim["at"]]
         rise = _RISE_BEFORE.search(before)
         if rise and rise.group(1).lower() == "up" and not _UP_LEAD.search(before[:rise.start()]):
@@ -200,16 +202,20 @@ def _pairs(values, ratios):
     return out
 
 
-def check(text, values, ignore=(), totals=()):
-    """(sourced, derived, unsourced) lists of raw strings; see check_detail."""
-    return check_detail(text, values, ignore, totals)[:3]
+class Checked(NamedTuple):
+    """The claims of a reply, as raw strings, by how they trace."""
+    sourced: list    # a tool result holds the number
+    derived: list    # simple arithmetic on sourced numbers gives it
+    unsourced: list  # nothing gives it
+    loose: list      # of derived: only two result values the reply does not show give it, so it can be chance
+    unchecked: list  # a year or a round factor that no result holds, with the reason: "2024 (looks like a year)"
 
 
 def check_detail(text, values, ignore=(), totals=()):
-    """Split the claims in text into (sourced, derived, unsourced, loose) lists of raw strings.
-    loose: derived claims that only match by combining two result values the reply does not show.
-    With a few hundred result values there are about 270k such combinations, so an invented number
-    can match by chance; the verdict then asks the reader to check them.
+    """Sort the claims in text into a Checked. loose: with a few hundred result values there are about
+    270k pairs, so an invented number can match by chance; the verdict then asks the reader to check them.
+    A year or a round factor counts only when a result holds it: "÷ 100" or "in 2024" may not be a claim,
+    so arithmetic that happens to give it proves nothing. It is named as not checked, never flagged.
 
     values: numbers from tool results. ignore: raw strings to skip (numbers the user typed).
     totals: column totals of cited results. A claim is "derived" when simple arithmetic on
@@ -224,11 +230,7 @@ def check_detail(text, values, ignore=(), totals=()):
         ok = _matches(pool, claim["value"], claim["tol"], claim["percent"]) or (
             claim.get("written") is not None and _near(pool, claim["written"], claim["written_tol"]))
         (sourced if ok else rest).append(claim)
-    shown = {c["value"] for c in claims if c in sourced}
-    # powers of ten are skipped as claims, but "964 of 1000 rows" still uses 1000 as a sourced number
-    shown |= {float(m) for m in re.findall(r"(?<![\w.,])10+(?![\w,]|\.\d)", _CODE.sub(_blank, text or ""))
-              if _near(pool, float(m), 0.5)}
-    shown = sorted(shown)
+    shown = sorted({c["value"] for c in claims if c in sourced})
     sums = sorted(_pairs(shown, ratios=False))
     # ponytail: pairs of pool values only while the pool is small (O(n^2)); cited results are usually small.
     strong = set(shown) | {abs(t) for t in totals}
@@ -238,8 +240,11 @@ def check_detail(text, values, ignore=(), totals=()):
         units |= {v * f for v in pool} | {v / f for v in pool}
     wide, wide_pct = sorted(other | units | _triples(shown)), sorted(other)
     hidden = sorted(_pairs(sorted(strong | set(pool)), ratios=True)) if len(pool) <= MAX_PAIR_POOL else []
-    derived, unsourced, loose = [], [], []
+    derived, unsourced, loose, unchecked = [], [], [], []
     for claim in rest:
+        if claim["skip"]:
+            unchecked.append(f"{claim['raw']} ({claim['skip']})")
+            continue
         # ponytail: a small whole number (under 100) is easy to hit by chance, so it may only be a sum or
         # difference of two numbers the reply shows; bigger or decimal numbers may also be a unit change,
         # ratio, share or column total.
@@ -251,23 +256,25 @@ def check_detail(text, values, ignore=(), totals=()):
             ok = True
             loose.append(claim["raw"])
         (derived if ok else unsourced).append(claim["raw"])
-    return [c["raw"] for c in sourced], derived, unsourced, loose
+    return Checked([c["raw"] for c in sourced], derived, unsourced, loose, unchecked)
 
 
-def footer(sourced, unsourced, derived=(), loose=(), uncited=()):
-    """A short plain-text footer, or "" when the reply has no numeric claims.
+def footer(checked, uncited=()):
+    """A short plain-text footer, or "" when the reply has no number to check.
     Not counted as tracing: loose numbers (matched only by combining two hidden result values) and uncited
     numbers (found only in a result of the chat that the reply does not cite)."""
+    sourced, derived, unsourced, loose, unchecked = checked
+    join = lambda items: " · ".join(dict.fromkeys(items))
     derived = [d for d in derived if d not in loose]
     traced = len(sourced) + len(derived)
     total = traced + len(unsourced) + len(loose) + len(uncited)
     if not total:
         return ""
-    how = f" ({len(derived)} by simple arithmetic: {' · '.join(dict.fromkeys(derived))})" if derived else ""
+    how = f" ({len(derived)} by simple arithmetic: {join(derived)})" if derived else ""
+    skipped = f" Not checked: {join(unchecked)}." if unchecked else ""
     if not (unsourced or loose or uncited):
         what = "the number traces" if total == 1 else f"all {total} numbers trace"
-        return f"\n\n---\nGrimoire check: {what} to query results{how}."
+        return f"\n\n---\nGrimoire check: {what} to query results{how}.{skipped}"
     why, which = (("No source query for", unsourced) if unsourced else
                   ("Check how these were worked out", loose) if loose else ("Not from a cited query", uncited))
-    return (f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. "
-            f"{why}: {' · '.join(dict.fromkeys(which))}")
+    return f"\n\n---\nGrimoire check: {traced} of {total} numbers trace to query results{how}. {why}: {join(which)}.{skipped}"

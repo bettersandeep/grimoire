@@ -207,13 +207,14 @@ def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db
     # (they have no id). Every other result of the chat is too wide a net: one list of 200 order ids
     # "sources" any invented count up to 200. Such a number is not counted as traced.
     pool = file_values + cited_values if cited_queries else values
-    sourced, derived, unsourced, loose = verify.check_detail(text, pool, ignore=ignore, totals=totals)
+    checked = verify.check_detail(text, pool, ignore=ignore, totals=totals)
     uncited = []
-    if cited_queries and unsourced:
-        nowhere = verify.check_detail(text, values, ignore=ignore, totals=totals)[2]
-        uncited = [n for n in unsourced if n not in nowhere]
-        unsourced = [n for n in unsourced if n in nowhere]
-    out = verify.footer(sourced, unsourced, derived, loose, uncited)
+    if cited_queries and checked.unsourced:
+        nowhere = verify.check_detail(text, values, ignore=ignore, totals=totals).unsourced
+        uncited = [n for n in checked.unsourced if n not in nowhere]
+        checked = checked._replace(unsourced=[n for n in checked.unsourced if n in nowhere])
+    unsourced, loose = checked.unsourced, checked.loose
+    out = verify.footer(checked, uncited)
     last = store.get_query(db, last_qid) if out and last_qid and not cited_queries else None
     audited = cited_queries or ([last] if last else [])
     if out and (audited or missing):
@@ -223,7 +224,7 @@ def _number_check(text, values, file_values, ignore, cited_queries, last_qid, db
             out = out.rstrip(".") + f". Verdict: {judged}." + "".join("\n" + line for line in lines)
         except Exception:
             pass  # the audit is extra; never lose the number check because of it
-    return out, sourced
+    return out, checked.sourced
 
 
 def _prediction(db, session_id, text, sourced):

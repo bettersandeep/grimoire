@@ -39,10 +39,15 @@ REAL_RESULTS = [
 ]
 
 
+def check3(text, values, **kw):
+    """(sourced, derived, unsourced) of a reply: the short form most tests compare."""
+    return tuple(verify.check_detail(text, values, **kw)[:3])
+
+
 def test_verify():
     # precision, suffixes, percent, ignored spans
     vals = [76840174.17, 14.2, 0.383, 2436]
-    chk = lambda text, v=vals, **kw: verify.check(text, v, **kw)
+    chk = lambda text, v=vals, **kw: check3(text, v, **kw)
     assert chk("North made 76.8M") == (["76.8M"], [], [])
     assert chk("North made $76,840,174.17") == (["76,840,174.17"], [], [])
     assert chk("North made ₹76,840,174.17") == (["76,840,174.17"], [], [])  # other currency symbols work too
@@ -50,15 +55,21 @@ def test_verify():
     assert chk("38.3% are empty") == (["38.3%"], [], [])  # matches 0.383
     assert chk("2,436 rows") == (["2,436"], [], [])
     assert chk("2,437 rows") == ([], [], ["2,437"])
-    skipped = ("In 2026 on 2026-01-03 at 10:30, see [q7] and q12, `SELECT 42`, divide by 100 or 100.0, "
-               "April (2026-04), 4xx codes.\n1. first")
+    skipped = ("On 2026-01-03 at 10:30, see [q7] and q12, `SELECT 42`, April (2026-04), 4xx codes.\n1. first")
     assert chk(skipped) == ([], [], []), verify.extract(skipped)
     assert chk("top 3 regions", ignore=["3"]) == ([], [], [])
+    # a year or a round factor is still read: it traces when a result holds it, else it is named as not checked
+    hidden = verify.check_detail("In 2026, divide by 100 or 100.0; 2,436 rows", vals)
+    assert hidden.sourced == ["2,436"] and hidden.unsourced == [], hidden
+    assert hidden.unchecked == ["2026 (looks like a year)", "100 (a round factor)", "100.0 (a round factor)"], hidden
+    assert "Not checked: 2026 (looks like a year) · 100 (a round factor)" in verify.footer(hidden), verify.footer(hidden)
+    assert check3("2024 orders and 100 returns", [2024, 100]) == (["2024", "100"], [], [])
+    assert verify.footer(verify.check_detail("Since 2019.", vals)) == ""  # no number to check: no footer
     # a written date is not a claim: the day of "November 11, 2026" once made a right answer "needs revision"
     for written in ("but today is November 11, 2026.", "on 11 November 2026", "since Nov. 3, 2026", "until Sept 30."):
         assert verify.extract(written) == [], (written, verify.extract(written))
     assert [c["raw"] for c in verify.extract("May 12 orders were late, and may 7 more")] == ["12", "7"]
-    assert verify.footer([], []) == ""
+    assert verify.footer(verify.Checked([], [], [], [], [])) == ""
     # derived numbers: simple arithmetic on shown numbers, unit changes, column totals
     v = [50000, 1996, 189759.34, 72188507.98, 4651666.19]
     assert chk("50,000 rows, 1,996 empty, so 48,004 kept", v) == (["50,000", "1,996"], ["48,004"], [])
@@ -70,13 +81,14 @@ def test_verify():
     assert chk(three, [58904.49, 5893.35, 1965.24, 49079.24]) == (["58,904.49", "5,893.35", "1,965.24"], ["66,763.08"], [])
     assert chk(three.replace("66,763.08", "66,763.99"), [58904.49, 5893.35, 1965.24])[2] == ["66,763.99"]
     assert chk(three.replace("66,763.08", "$66,763.08M"), [58904.49, 5893.35, 1965.24])[1] == ["66,763.08M"]
-    assert chk("964 of 1000 rows have an amount (36 skipped)", [1000, 964]) == (["964"], ["36"], [])
+    assert chk("964 of 1000 rows have an amount (36 skipped)", [1000, 964]) == (["964", "1000"], ["36"], [])
     assert chk("about 2,000 empty", v) == ([], [], ["2,000"])  # rounded: still flagged
     # the real reply: the derived total is now traced by arithmetic; the invented count is still flagged
-    sourced, derived, unsourced = verify.check(REAL_REPLY, verify.numeric_values(REAL_RESULTS))
-    assert unsourced == ["5"], (unsourced, derived)
-    assert derived == ["76,840,174.17"] and len(sourced) == 9, (sourced, derived)
-    assert "1 by simple arithmetic: 76,840,174.17" in verify.footer(sourced, unsourced, derived)
+    real = verify.check_detail(REAL_REPLY, verify.numeric_values(REAL_RESULTS))
+    assert real.unsourced == ["5"], real
+    assert real.derived == ["76,840,174.17"] and len(real.sourced) == 9, real
+    assert "1 by simple arithmetic: 76,840,174.17" in verify.footer(real._replace(loose=[]))
+    assert verify.footer(real).endswith("No source query for: 5. Not checked: 100 (a round factor)."), verify.footer(real)
 
 
 def test_data_quality(tmp, db):
@@ -654,10 +666,10 @@ def test_glob_and_names(tmp, db):
     # numbers inside names and zero-padded codes are not claims; an invented count still is
     text = "6 files: yellow_2024-05.parquet has 3,723,833 rows (2024-01 through 06); 5 rows are odd."
     assert [c["raw"] for c in verify.extract(text)] == ["6", "3,723,833", "5"], verify.extract(text)
-    assert verify.check(text, [3723833, 6])[2] == ["5"]
+    assert check3(text, [3723833, 6])[2] == ["5"]
     # clock times: "6 PM" is the hour 18, so it traces to 18; a wrong hour is still flagged
-    assert verify.check("Hour 18 (6 PM) has 1,456,754 trips", [18, 1456754]) == (["18", "6 PM", "1,456,754"], [], [])
-    assert verify.check("busiest at 7 pm", [18])[2] == ["7 pm"] and verify.check("at 12 a.m.", [0])[0] == ["12 a.m."]
+    assert check3("Hour 18 (6 PM) has 1,456,754 trips", [18, 1456754]) == (["18", "6 PM", "1,456,754"], [], [])
+    assert check3("busiest at 7 pm", [18])[2] == ["7 pm"] and check3("at 12 a.m.", [0])[0] == ["12 a.m."]
 
 
 def test_recipes(tmp, db):
@@ -797,17 +809,17 @@ def test_review_fixes(tmp, db):
                 assert "private app data" in str(exc), exc
     # C-5: numbers that only match two hidden result values get a caveat, not "ready to share"
     random_vals = [round(10 + 37.3 * i % 4990, 2) for i in range(150)] + list(range(1, 51))
-    s_, d_, u_, loose = verify.check_detail("Growth was 23.7%, the share 41.2% and the average 18.4.", random_vals)
+    s_, d_, u_, loose, _ = verify.check_detail("Growth was 23.7%, the share 41.2% and the average 18.4.", random_vals)
     assert not u_ and {"23.7%", "41.2%"} <= set(loose), (s_, d_, u_, loose)  # 18.4 is 1840 / 100 here: a unit change
     assert pkg.audit.review([], None, [], verify.caveats(loose))[0] == "share with caveats"
     # SQL that computes millions (29.05) and a reply that writes "$29.05M": the number traces as written
     musd = verify.numeric_values([["North", 29.05, 15025], ["north ", 3.04, 1609], ["N. Region", 0.94, 493]])
-    s_, d_, u_ = verify.check("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
+    s_, d_, u_ = check3("North $29.05M, north $3.04M, N. Region $0.94M; $33.03M in all [q1].", musd)
     assert s_ == ["29.05M", "3.04M", "0.94M"] and d_ == ["33.03M"] and not u_, (s_, d_, u_)  # sum of three shown
     # "$15M" must not match a count of 15; "all numbers trace" never counts loose matches
-    s_, d_, u_ = verify.check("North brought in $15M [q1].", verify.numeric_values([["North", 1200, 15]]))
+    s_, d_, u_ = check3("North brought in $15M [q1].", verify.numeric_values([["North", 1200, 15]]))
     assert u_ == ["15M"], (s_, d_, u_)
-    assert "Check how these were worked out: 23.7%" in verify.footer([], [], ["23.7%"], ["23.7%"])
+    assert "Check how these were worked out: 23.7%" in verify.footer(verify.Checked([], ["23.7%"], [], ["23.7%"], []))
     # a merge that reverses an old one wins
     store.save_merge(db, "rev", "rev", "r", ["North"], "Northern")
     store.save_merge(db, "rev", "rev", "r", ["Northern"], "North")
